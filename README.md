@@ -1,4 +1,4 @@
-# LPLang (Lumpo) v0.6.2
+# LPLang (Lumpo) v0.7.0
 
 **Bahasa pemrograman ringan, stabil, dan mudah dipahami.**
 
@@ -15,6 +15,7 @@ LPLang masih dalam tahap pengembangan awal (pre-1.0). Versi mengikuti semantic v
 | `0.6.0` | Struct, method, pattern matching, list/map comprehension, validasi argumen fungsi, dan kompatibilitas modul stdlib |
 | `0.6.1` | CLI `--version`, konstanta versi tunggal, perbaikan banner REPL (sebelumnya salah tulis v1.1) |
 | `0.6.2` | Error reporting: line number untuk IndexError/KeyError, ekspresi error menunjuk baris yang tepat, message catch bersih dari `(line N)` |
+| `0.7.0` | Module resolution diperluas: import tanpa ekstensi (`import "./lib/util"`), import relatif cwd (`import "lib/util.lp"`), resolver konsisten untuk proyek multi-file |
 
 ## Fitur Bahasa
 - `let` / `const` — variabel mutable & read-only
@@ -113,9 +114,10 @@ python3 tests/test_v1_3_1.py         # v0.4.1 (2 test)
 python3 tests/test_v0_6_0.py         # v0.6 (12 test)
 python3 tests/test_cli_version.py    # CLI --version (2 test)
 python3 tests/test_error_reporting.py # error reporting (5 test)
+python3 tests/test_module_resolution.py # module resolution (5 test)
 ```
 
-Total: **68 test**, semua lulus.
+Total: **73 test**, semua lulus.
 
 ## Roadmap
 | Versi | Target |

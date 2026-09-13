@@ -21,7 +21,7 @@ import sys, re
 from pathlib import Path
 from types import SimpleNamespace
 
-LUMPO_VERSION = "0.6.2"
+LUMPO_VERSION = "0.7.0"
 
 # ── stdlib loader ──
 _stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
@@ -29,32 +29,55 @@ _stdlib_cache = {}
 _current_file = None
 
 def _import_mod(name):
-    if name not in _stdlib_cache:
-        # local file import: import "./path/file.lp" or import "file.lp"
-        if name.endswith('.lp'):
-            mod_path = (Path(_current_file or '.').parent / name).resolve()
-            if not mod_path.exists():
-                raise RuntimeError(f"module file '{name}' not found")
-            src = mod_path.read_text()
-            toks = tokenize(src)
-            ast = Parser(toks).parse()
-            ns = {}
-            mod_env = Env(make_global_env())
-            exec_block(ast.stmts, mod_env)
-            public = {k: v for k, v in mod_env.vars.items()}
-            _stdlib_cache[name] = SimpleNamespace(**public)
-            # also bind module under a clean name derived from the basename
-            base = Path(name).stem
-            if base and base not in _stdlib_cache:
-                _stdlib_cache[base] = _stdlib_cache[name]
-            return _stdlib_cache.get(base, _stdlib_cache[name])
-        mod_path = _stdlib_dir / f"{name}.py"
-        if not mod_path.exists():
-            raise RuntimeError(f"module '{name}' not found")
+    """Resolve a module by name with three supported forms:
+
+      1. `import "mod"` -> stdlib (lumpo_stdlib/mod.py)
+      2. `import "./path/file"` or `"./path/file.lp"` -> local file relative to
+         the importing file's directory
+      3. `import "path/to/file"` -> local file relative to current working dir
+
+    Local .lp modules are tokenized+parsed in a child env so each file gets
+    its own scope; public non-underscore bindings are re-exported.
+    """
+    if name in _stdlib_cache:
+        return _stdlib_cache[name]
+
+    is_stdlib = not (name.startswith(('.', '/')) or '/' in name or name.endswith('.lp'))
+    if name.endswith('.lp') or (not is_stdlib):
+        # local module: resolve relative to the importing file's dir, then cwd
+        base_dir = Path(_current_file).parent if _current_file else Path('.')
+        candidates = [
+            (base_dir / name).resolve(),
+            (Path('.') / name).resolve(),
+        ]
+        if not name.endswith('.lp'):
+            candidates.append(candidates[0].with_suffix('.lp'))
+            candidates.append(candidates[1].with_suffix('.lp'))
+        mod_path = next((p for p in candidates if p.exists()), None)
+        if mod_path is None:
+            raise RuntimeError(f"module file '{name}' not found")
+        src = mod_path.read_text()
+        toks = tokenize(src)
+        ast = Parser(toks).parse()
         ns = {}
-        exec(mod_path.read_text(), ns)
-        public = {k: v for k, v in ns.items() if not k.startswith('_')}
+        mod_env = Env(make_global_env())
+        exec_block(ast.stmts, mod_env)
+        public = {k: v for k, v in mod_env.vars.items()}
         _stdlib_cache[name] = SimpleNamespace(**public)
+        # also bind module under a clean name derived from the basename
+        base = Path(name).stem
+        if base and base not in _stdlib_cache:
+            _stdlib_cache[base] = _stdlib_cache[name]
+        return _stdlib_cache.get(base, _stdlib_cache[name])
+
+    # stdlib module
+    mod_path = _stdlib_dir / f"{name}.py"
+    if not mod_path.exists():
+        raise RuntimeError(f"module '{name}' not found")
+    ns = {}
+    exec(mod_path.read_text(), ns)
+    public = {k: v for k, v in ns.items() if not k.startswith('_')}
+    _stdlib_cache[name] = SimpleNamespace(**public)
     return _stdlib_cache[name]
 
 
