@@ -1,0 +1,2123 @@
+#!/usr/bin/env python3
+"""
+lumpo v0.6.1 — LPLang interpreter with native syntax
+supports:
+  - let x = expr
+  - print expr
+  - import "mod"
+  - fn name(params) { body }
+  - if expr { body } else { body }
+  - while expr { body }
+  - for x in range(n) { body }
+  - return expr
+  - component Name(props) { body }
+  - # comments
+  - string interpolation: "hello ${name}"
+  - multiline blocks with { }
+  - dot access: router.get("/", handler)
+  - assignment: x = expr
+"""
+import sys, re
+from pathlib import Path
+from types import SimpleNamespace
+
+LUMPO_VERSION = "0.6.1"
+
+# ── stdlib loader ──
+_stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
+_stdlib_cache = {}
+_current_file = None
+
+def _import_mod(name):
+    if name not in _stdlib_cache:
+        # local file import: import "./path/file.lp" or import "file.lp"
+        if name.endswith('.lp'):
+            mod_path = (Path(_current_file or '.').parent / name).resolve()
+            if not mod_path.exists():
+                raise RuntimeError(f"module file '{name}' not found")
+            src = mod_path.read_text()
+            toks = tokenize(src)
+            ast = Parser(toks).parse()
+            ns = {}
+            mod_env = Env(make_global_env())
+            exec_block(ast.stmts, mod_env)
+            public = {k: v for k, v in mod_env.vars.items()}
+            _stdlib_cache[name] = SimpleNamespace(**public)
+            # also bind module under a clean name derived from the basename
+            base = Path(name).stem
+            if base and base not in _stdlib_cache:
+                _stdlib_cache[base] = _stdlib_cache[name]
+            return _stdlib_cache.get(base, _stdlib_cache[name])
+        mod_path = _stdlib_dir / f"{name}.py"
+        if not mod_path.exists():
+            raise RuntimeError(f"module '{name}' not found")
+        ns = {}
+        exec(mod_path.read_text(), ns)
+        public = {k: v for k, v in ns.items() if not k.startswith('_')}
+        _stdlib_cache[name] = SimpleNamespace(**public)
+    return _stdlib_cache[name]
+
+
+# ── tokenizer ──
+class Token:
+    def __init__(self, kind, value, line):
+        self.kind = kind
+        self.value = value
+        self.line = line
+    def __repr__(self):
+        return f"Token({self.kind}, {self.value!r})"
+
+TOKEN_SPEC = [
+    ('BLOCKCOMMENT', r'/\*[\s\S]*?\*/'),
+    ('COMMENT',   r'#[^\n]*'),
+    ('TRIPLE',    r'"""[\s\S]*?"""'),
+    ('STRING',    r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''),
+    ('NUMBER',    r'\d+(?:\.\d+)?'),
+    ('PIPE',      r'\|>'),
+    ('ARROW',     r'->'),
+    ('FATARROW',  r'=>'),
+    ('OPTDOT',    r'\?\.'),
+    ('OP',        r'\?\?|\?:|<=|>=|!=|==|\+=|-=|\*=|/=|%=|&&|\|\||//|\?|[+\-*/%]|[<>]'),
+    ('LBRACE',    r'\{'),
+    ('RBRACE',    r'\}'),
+    ('LPAREN',    r'\('),
+    ('RPAREN',    r'\)'),
+    ('LBRACK',    r'\['),
+    ('RBRACK',    r'\]'),
+    ('COMMA',     r','),
+    ('DOT',       r'\.'),
+    ('COLON',     r':'),
+    ('ASSIGN',    r'='),
+    ('NEWLINE',   r'\n'),
+    ('SKIP',      r'[ \t]+'),
+    ('IDENT',     r'[a-zA-Z_]\w*'),
+]
+_tok_re = re.compile('|'.join(f'(?P<{n}>{p})' for n, p in TOKEN_SPEC))
+
+KEYWORDS = {'let', 'const', 'fn', 'if', 'else', 'elif', 'while', 'for', 'in', 'return',
+            'import', 'print', 'component', 'true', 'false', 'and', 'or', 'not',
+            'null', 'none', 'try', 'catch', 'throw',
+            'switch', 'case', 'default', 'break', 'continue', 'defer'}
+
+def tokenize(src):
+    tokens = []
+    line = 1
+    for m in _tok_re.finditer(src):
+        kind = m.lastgroup
+        val = m.group()
+        if kind == 'NEWLINE':
+            line += 1
+            tokens.append(Token('NEWLINE', '\\n', line))
+        elif kind == 'SKIP' or kind == 'COMMENT':
+            continue
+        elif kind == 'BLOCKCOMMENT':
+            line += val.count('\n')
+            continue
+        elif kind == 'IDENT' and val in KEYWORDS:
+            tokens.append(Token(val.upper(), val, line))
+        elif kind == 'NUMBER':
+            tokens.append(Token('NUMBER', float(val) if '.' in val else int(val), line))
+        elif kind == 'TRIPLE':
+            line += val.count('\n')
+            tokens.append(Token('STRING', val[3:-3], line))
+        elif kind == 'STRING':
+            tokens.append(Token('STRING', val[1:-1], line))
+        else:
+            tokens.append(Token(kind, val, line))
+    tokens.append(Token('EOF', None, line))
+    return tokens
+
+
+# ── AST nodes ──
+class ASTNode: pass
+
+class Program(ASTNode):
+    def __init__(self, stmts):
+        self.stmts = stmts
+
+class LetStmt(ASTNode):
+    def __init__(self, name, expr, is_const=False):
+        self.name = name
+        self.expr = expr
+        self.is_const = is_const
+
+class DestructureArrayStmt(ASTNode):
+    def __init__(self, names, expr, is_const=False):
+        self.names = names
+        self.expr = expr
+        self.is_const = is_const
+
+class DestructureMapStmt(ASTNode):
+    def __init__(self, names, expr, is_const=False):
+        self.names = names
+        self.expr = expr
+        self.is_const = is_const
+
+class DeferStmt(ASTNode):
+    def __init__(self, stmt):
+        self.stmt = stmt
+
+class PipeExpr(ASTNode):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+
+class StructStmt(ASTNode):
+    def __init__(self, name, fields, methods=None):
+        self.name = name
+        self.fields = fields
+        self.methods = methods or []
+
+class MethodDef(ASTNode):
+    def __init__(self, struct_name, receiver, name, params, body):
+        self.struct_name = struct_name
+        self.receiver = receiver
+        self.name = name
+        self.params = params
+        self.body = body
+
+class MatchStmt(ASTNode):
+    def __init__(self, expr, cases):
+        self.expr = expr
+        self.cases = cases
+
+class StructPattern(ASTNode):
+    def __init__(self, name, fields):
+        self.name = name
+        self.fields = fields
+
+class StructInitExpr(ASTNode):
+    def __init__(self, name, fields):
+        self.name = name
+        self.fields = fields
+
+class ArrayComprehension(ASTNode):
+    def __init__(self, expr, var, iterable, condition):
+        self.expr = expr
+        self.var = var
+        self.iterable = iterable
+        self.condition = condition
+
+class MapComprehension(ASTNode):
+    def __init__(self, key, value, var, iterable, condition):
+        self.key = key
+        self.value = value
+        self.var = var
+        self.iterable = iterable
+        self.condition = condition
+
+class OptDotExpr(ASTNode):
+    def __init__(self, obj, attr):
+        self.obj = obj
+        self.attr = attr
+
+class AssignStmt(ASTNode):
+    def __init__(self, name, expr, op='='):
+        self.name = name
+        self.expr = expr
+        self.op = op
+
+class DotAssignStmt(ASTNode):
+    def __init__(self, obj, field, expr, op='='):
+        self.obj = obj
+        self.field = field
+        self.expr = expr
+        self.op = op
+
+class SwitchStmt(ASTNode):
+    def __init__(self, expr, cases, default):
+        self.expr = expr
+        self.cases = cases  # list of (value_literal, body)
+        self.default = default  # body list or None
+
+class BreakStmt(ASTNode):
+    def __init__(self):
+        pass
+
+class ContinueStmt(ASTNode):
+    def __init__(self):
+        pass
+
+class Ternary(ASTNode):
+    def __init__(self, cond, if_true, if_false):
+        self.cond = cond
+        self.if_true = if_true
+        self.if_false = if_false
+
+class NullCoalesce(ASTNode):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+
+class PrintStmt(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+class ImportStmt(ASTNode):
+    def __init__(self, module):
+        self.module = module
+
+class ReturnStmt(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+class FnDef(ASTNode):
+    def __init__(self, name, params, body):
+        self.name = name
+        self.params = params
+        self.body = body
+
+class FnExpr(ASTNode):
+    def __init__(self, params, body):
+        self.params = params
+        self.body = body
+
+class IfStmt(ASTNode):
+    def __init__(self, cond, body, else_body):
+        self.cond = cond
+        self.body = body
+        self.else_body = else_body
+
+class WhileStmt(ASTNode):
+    def __init__(self, cond, body):
+        self.cond = cond
+        self.body = body
+
+class ForStmt(ASTNode):
+    def __init__(self, var, iterable, body):
+        self.var = var
+        self.iterable = iterable
+        self.body = body
+
+class ComponentDef(ASTNode):
+    def __init__(self, name, params, body):
+        self.name = name
+        self.params = params
+        self.body = body
+
+class TryStmt(ASTNode):
+    def __init__(self, body, catch_var, catch_body):
+        self.body = body
+        self.catch_var = catch_var
+        self.catch_body = catch_body
+
+class ThrowStmt(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+class CallExpr(ASTNode):
+    def __init__(self, callee, args):
+        self.callee = callee
+        self.args = args
+
+class DotExpr(ASTNode):
+    def __init__(self, obj, attr):
+        self.obj = obj
+        self.attr = attr
+
+class IndexExpr(ASTNode):
+    def __init__(self, obj, index):
+        self.obj = obj
+        self.index = index
+
+class BinOp(ASTNode):
+    def __init__(self, op, left, right):
+        self.op = op
+        self.left = left
+        self.right = right
+
+class UnaryOp(ASTNode):
+    def __init__(self, op, operand):
+        self.op = op
+        self.operand = operand
+
+class Literal(ASTNode):
+    def __init__(self, value):
+        self.value = value
+
+class Ident(ASTNode):
+    def __init__(self, name):
+        self.name = name
+
+class ArrayLiteral(ASTNode):
+    def __init__(self, elements):
+        self.elements = elements
+
+class MapLiteral(ASTNode):
+    def __init__(self, pairs):
+        self.pairs = pairs  # list of (key_expr, val_expr)
+
+class InterpolatedString(ASTNode):
+    def __init__(self, parts):
+        self.parts = parts  # list of str | ASTNode
+
+class ExprStmt(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+
+# ── parser ──
+class ReturnSignal(Exception):
+    def __init__(self, value):
+        self.value = value
+
+
+class ThrowSignal(Exception):
+    """user-level throw / runtime error caught by try-catch"""
+    def __init__(self, value):
+        self.value = value
+        super().__init__(str(value))
+
+
+class BreakSignal(Exception):
+    """break out of loop"""
+    pass
+
+
+class ContinueSignal(Exception):
+    """skip to next loop iteration"""
+    pass
+
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self):
+        return self.tokens[self.pos]
+
+    def advance(self):
+        t = self.tokens[self.pos]
+        self.pos += 1
+        return t
+
+    def expect(self, kind):
+        t = self.advance()
+        if t.kind != kind:
+            raise SyntaxError(f"expected {kind}, got {t.kind} ({t.value!r}) at line {t.line}")
+        return t
+
+    def skip_newlines(self):
+        while self.peek().kind == 'NEWLINE':
+            self.advance()
+
+    def parse(self):
+        stmts = []
+        self.skip_newlines()
+        while self.peek().kind != 'EOF':
+            start_line = self.peek().line
+            stmt = self.parse_stmt()
+            stmt._line = start_line
+            stmts.append(stmt)
+            self.skip_newlines()
+        return Program(stmts)
+
+    def parse_stmt(self):
+        self.skip_newlines()
+        t = self.peek()
+        if t.kind in ('LET', 'CONST'):
+            return self.parse_let()
+        elif t.kind == 'PRINT':
+            return self.parse_print()
+        elif t.kind == 'IMPORT':
+            return self.parse_import()
+        elif t.kind == 'FN':
+            return self.parse_fn_def()
+        elif t.kind == 'IF':
+            return self.parse_if()
+        elif t.kind == 'WHILE':
+            return self.parse_while()
+        elif t.kind == 'FOR':
+            return self.parse_for()
+        elif t.kind == 'RETURN':
+            return self.parse_return()
+        elif t.kind == 'COMPONENT':
+            return self.parse_component()
+        elif t.kind == 'TRY':
+            return self.parse_try()
+        elif t.kind == 'THROW':
+            self.advance()
+            expr = self.parse_expr()
+            return ThrowStmt(expr)
+        elif t.kind == 'DEFER':
+            self.advance()
+            stmt = self.parse_stmt()
+            return DeferStmt(stmt)
+        elif t.kind == 'SWITCH':
+            return self.parse_switch()
+        elif t.kind == 'IDENT' and t.value == 'struct' and self._next_meaningful_kind() == 'IDENT':
+            return self.parse_struct()
+        elif t.kind == 'IDENT' and t.value == 'match':
+            return self.parse_match()
+        elif t.kind == 'BREAK':
+            self.advance()
+            return BreakStmt()
+        elif t.kind == 'CONTINUE':
+            self.advance()
+            return ContinueStmt()
+        else:
+            return self.parse_expr_or_assign_stmt()
+
+    def parse_let(self):
+        is_const = self.peek().kind == 'CONST'
+        if is_const:
+            self.advance()
+        else:
+            self.expect('LET')
+        if self.peek().kind == 'LBRACK':
+            self.advance()
+            names = []
+            while self.peek().kind != 'RBRACK':
+                names.append(self.expect('IDENT').value)
+                if self.peek().kind == 'COMMA':
+                    self.advance()
+            self.expect('RBRACK')
+            self.expect('ASSIGN')
+            expr = self.parse_expr()
+            return DestructureArrayStmt(names, expr, is_const=is_const)
+        elif self.peek().kind == 'LBRACE':
+            self.advance()
+            names = []
+            while self.peek().kind != 'RBRACE':
+                names.append(self.expect('IDENT').value)
+                if self.peek().kind == 'COMMA':
+                    self.advance()
+            self.expect('RBRACE')
+            self.expect('ASSIGN')
+            expr = self.parse_expr()
+            return DestructureMapStmt(names, expr, is_const=is_const)
+        else:
+            name = self.expect('IDENT').value
+            self.expect('ASSIGN')
+            expr = self.parse_expr()
+            return LetStmt(name, expr, is_const=is_const)
+
+    def _next_meaningful_kind(self):
+        pos = self.pos + 1
+        while self.tokens[pos].kind == 'NEWLINE':
+            pos += 1
+        return self.tokens[pos].kind
+
+    def parse_struct(self):
+        name = self.expect('IDENT').value
+        if name != 'struct':
+            raise SyntaxError(f"expected struct, got {name!r}")
+        name = self.expect('IDENT').value
+        self.expect('LBRACE')
+        fields = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            field = self.expect('IDENT').value
+            if field in fields:
+                raise SyntaxError(f"duplicate field '{field}'")
+            fields.append(field)
+            if self.peek().kind == 'COMMA':
+                self.advance()
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return StructStmt(name, fields)
+
+    def parse_match(self):
+        name = self.expect('IDENT').value
+        if name != 'match':
+            raise SyntaxError(f"expected match, got {name!r}")
+        expr = self.parse_expr()
+        self.expect('LBRACE')
+        cases = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            self.skip_newlines()
+            if self.peek().kind == 'CASE':
+                self.advance()
+                pattern = self.parse_match_pattern()
+                self.skip_newlines()
+                if self.peek().kind == 'LBRACE':
+                    body = self.parse_block()
+                else:
+                    self.expect('FATARROW')
+                    self.skip_newlines()
+                    if self.peek().kind == 'PRINT':
+                        body = self.parse_print()
+                    else:
+                        body = self.parse_expr()
+                cases.append((pattern, body))
+            elif self.peek().kind == 'DEFAULT':
+                self.advance()
+                self.skip_newlines()
+                if self.peek().kind == 'LBRACE':
+                    body = self.parse_block()
+                else:
+                    self.expect('FATARROW')
+                    self.skip_newlines()
+                    if self.peek().kind == 'PRINT':
+                        body = self.parse_print()
+                    else:
+                        body = self.parse_expr()
+                cases.append(('default', body))
+            else:
+                raise SyntaxError(f"unexpected token {self.peek().kind} in match at line {self.peek().line}")
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return MatchStmt(expr, cases)
+
+    def parse_match_pattern(self):
+        """Parse a match pattern - can be literal, variable binding, or struct pattern."""
+        t = self.peek()
+        if t.kind == 'IDENT':
+            # Could be a struct pattern or variable binding
+            # Look ahead to see if it's followed by LBRACE (struct pattern)
+            if self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1].kind == 'LBRACE':
+                return self.parse_struct_pattern()
+            else:
+                # Variable binding
+                self.advance()
+                return Ident(t.value)
+        elif t.kind in ('NUMBER', 'STRING', 'TRUE', 'FALSE', 'NULL', 'NONE'):
+            # Literal pattern
+            return self.parse_primary()
+        else:
+            raise SyntaxError(f"unexpected token {t.kind} in match pattern at line {t.line}")
+
+    def parse_struct_pattern(self):
+        """Parse struct pattern like Point { x: 1, y: 2 } or Point { x, y }"""
+        name = self.expect('IDENT').value
+        self.expect('LBRACE')
+        fields = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            field = self.expect('IDENT').value
+            if self.peek().kind == 'COLON':
+                self.advance()
+                value = self.parse_expr()
+                fields.append((field, value))
+            else:
+                # Shorthand: just field name (variable binding)
+                fields.append((field, None))
+            if self.peek().kind == 'COMMA':
+                self.advance()
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return StructPattern(name, fields)
+
+    def parse_print(self):
+        self.expect('PRINT')
+        expr = self.parse_expr()
+        return PrintStmt(expr)
+
+    def parse_import(self):
+        self.expect('IMPORT')
+        mod = self.expect('STRING').value
+        return ImportStmt(mod)
+
+    def parse_return(self):
+        self.expect('RETURN')
+        if self.peek().kind in ('NEWLINE', 'RBRACE', 'EOF'):
+            return ReturnStmt(Literal(None))
+        expr = self.parse_expr()
+        return ReturnStmt(expr)
+
+    def parse_fn_def(self):
+        self.expect('FN')
+        # method: fn (recv: Type) name(params) { body }
+        if self.peek().kind == 'LPAREN':
+            self.advance()
+            receiver = self.expect('IDENT').value
+            struct_name = None
+            if self.peek().kind == 'COLON':
+                self.advance()
+                struct_name = self.expect('IDENT').value
+            self.expect('RPAREN')
+            name = self.expect('IDENT').value
+            params = self.parse_params()
+            if self.peek().kind == 'ARROW':
+                self.advance()
+                self.expect('IDENT')
+            body = self.parse_block()
+            return MethodDef(struct_name, receiver, name, params, body)
+        name = self.expect('IDENT').value
+        params = self.parse_params()
+        if self.peek().kind == 'ARROW':
+            self.advance()
+            self.expect('IDENT')
+        body = self.parse_block()
+        return FnDef(name, params, body)
+
+    def parse_fn_expr(self):
+        self.expect('FN')
+        params = self.parse_params()
+        if self.peek().kind == 'ARROW':
+            self.advance()
+            self.expect('IDENT')
+        body = self.parse_block()
+        return FnExpr(params, body)
+
+    def parse_params(self):
+        self.expect('LPAREN')
+        params = []
+        while self.peek().kind != 'RPAREN':
+            name = self.expect('IDENT').value
+            # optional type annotation :Type
+            if self.peek().kind == 'COLON':
+                self.advance()
+                self.expect('IDENT')  # type, ignored
+            params.append(name)
+            if self.peek().kind == 'COMMA':
+                self.advance()
+        self.expect('RPAREN')
+        return params
+
+    def parse_block(self):
+        self.skip_newlines()
+        self.expect('LBRACE')
+        stmts = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            stmts.append(self.parse_stmt())
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return stmts
+
+    def parse_if(self):
+        self.expect('IF')
+        cond = self.parse_expr()
+        body = self.parse_block()
+        else_body = None
+        self.skip_newlines()
+        if self.peek().kind == 'ELIF':
+            self.advance()
+            # Parse the elif condition and body recursively as an IfStmt
+            else_body = [self.parse_elif_rest()]
+        elif self.peek().kind == 'ELSE':
+            self.advance()
+            if self.peek().kind == 'IF':
+                else_body = [self.parse_if()]
+            else:
+                else_body = self.parse_block()
+        return IfStmt(cond, body, else_body)
+
+    def parse_elif_rest(self):
+        cond = self.parse_expr()
+        body = self.parse_block()
+        else_body = None
+        self.skip_newlines()
+        if self.peek().kind == 'ELIF':
+            self.advance()
+            else_body = [self.parse_elif_rest()]
+        elif self.peek().kind == 'ELSE':
+            self.advance()
+            if self.peek().kind == 'IF':
+                else_body = [self.parse_if()]
+            else:
+                else_body = self.parse_block()
+        return IfStmt(cond, body, else_body)
+
+    def parse_while(self):
+        self.expect('WHILE')
+        cond = self.parse_expr()
+        body = self.parse_block()
+        return WhileStmt(cond, body)
+
+    def parse_for(self):
+        self.expect('FOR')
+        var = self.expect('IDENT').value
+        self.expect('IN')
+        iterable = self.parse_expr()
+        body = self.parse_block()
+        return ForStmt(var, iterable, body)
+
+    def parse_component(self):
+        self.expect('COMPONENT')
+        name = self.expect('IDENT').value
+        params = self.parse_params()
+        body = self.parse_block()
+        return ComponentDef(name, params, body)
+
+    def parse_try(self):
+        self.expect('TRY')
+        body = self.parse_block()
+        self.skip_newlines()
+        self.expect('CATCH')
+        catch_var = None
+        if self.peek().kind == 'IDENT':
+            catch_var = self.advance().value
+        catch_body = self.parse_block()
+        return TryStmt(body, catch_var, catch_body)
+
+    def parse_switch(self):
+        self.expect('SWITCH')
+        expr = self.parse_expr()
+        self.expect('LBRACE')
+        cases = []
+        default = None
+        while self.peek().kind != 'RBRACE':
+            self.skip_newlines()
+            if self.peek().kind == 'CASE':
+                self.advance()
+                value = self.parse_expr()
+                self.expect('LBRACE')
+                body = self.parse_block_to_rbrace()
+                cases.append((value, body))
+            elif self.peek().kind == 'DEFAULT':
+                self.advance()
+                self.expect('LBRACE')
+                default = self.parse_block_to_rbrace()
+            else:
+                break
+        self.expect('RBRACE')
+        return SwitchStmt(expr, cases, default)
+
+    def parse_block_to_rbrace(self):
+        """parse statements until closing RBRACE (for case bodies)."""
+        stmts = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            if self.peek().kind == 'EOF':
+                raise SyntaxError("unexpected EOF inside block")
+            stmt = self.parse_stmt()
+            if stmt is not None:
+                stmt._line = getattr(self.peek(), 'line', 0)
+                stmts.append(stmt)
+            self.skip_newlines()
+        self.advance()  # consume RBRACE
+        return stmts
+
+    def parse_expr_or_assign_stmt(self):
+        expr = self.parse_expr()
+        # check for assignment: ident = expr, ident +=/-=/*=/... expr, or obj.field = expr
+        if self.peek().kind == 'ASSIGN' and isinstance(expr, Ident):
+            self.advance()
+            val = self.parse_expr()
+            return AssignStmt(expr.name, val)
+        if self.peek().kind == 'OP' and self.peek().value in ('+=', '-=', '*=', '/=', '%=') and isinstance(expr, Ident):
+            op = self.advance().value
+            val = self.parse_expr()
+            return AssignStmt(expr.name, val, op=op)
+        if isinstance(expr, DotExpr) and self.peek().kind in ('ASSIGN', 'OP'):
+            op = self.advance()
+            if op.kind == 'ASSIGN':
+                val = self.parse_expr()
+                return DotAssignStmt(expr.obj, expr.attr, val)
+            if op.value in ('+=', '-=', '*=', '/=', '%='):
+                val = self.parse_expr()
+                return DotAssignStmt(expr.obj, expr.attr, val, op=op.value)
+        return ExprStmt(expr)
+
+    # ── expression parsing (precedence climbing) ──
+    def parse_expr(self):
+        return self.parse_pipe()
+
+    def parse_pipe(self):
+        left = self.parse_ternary()
+        while self.peek().kind == 'PIPE':
+            self.advance()
+            right = self.parse_ternary()
+            left = PipeExpr(left, right)
+        return left
+
+    def parse_ternary(self):
+        cond = self.parse_or()
+        if self.peek().kind == 'OP' and self.peek().value == '?':
+            self.advance()
+            if_true = self.parse_expr()
+            self.expect('COLON')
+            if_false = self.parse_expr()
+            return Ternary(cond, if_true, if_false)
+        return cond
+
+    def parse_or(self):
+        left = self.parse_null_coalesce()
+        while self.peek().kind == 'OR' or (self.peek().kind == 'OP' and self.peek().value == '||'):
+            op = self.advance().value
+            right = self.parse_null_coalesce()
+            left = BinOp(op, left, right)
+        return left
+
+    def parse_null_coalesce(self):
+        left = self.parse_and()
+        while self.peek().kind == 'OP' and self.peek().value == '??':
+            self.advance()
+            right = self.parse_and()
+            left = NullCoalesce(left, right)
+        return left
+
+    def parse_and(self):
+        left = self.parse_comparison()
+        while self.peek().kind == 'AND' or (self.peek().kind == 'OP' and self.peek().value == '&&'):
+            op = self.advance().value
+            right = self.parse_comparison()
+            left = BinOp(op, left, right)
+        return left
+
+    def parse_comparison(self):
+        left = self.parse_add()
+        while self.peek().kind == 'OP' and self.peek().value in ('==', '!=', '<', '>', '<=', '>='):
+            op = self.advance().value
+            right = self.parse_add()
+            left = BinOp(op, left, right)
+        return left
+
+    def parse_add(self):
+        left = self.parse_mul()
+        while self.peek().kind == 'OP' and self.peek().value in ('+', '-'):
+            op = self.advance().value
+            right = self.parse_mul()
+            left = BinOp(op, left, right)
+        return left
+
+    def parse_mul(self):
+        left = self.parse_unary()
+        while self.peek().kind == 'OP' and self.peek().value in ('*', '/', '%'):
+            op = self.advance().value
+            right = self.parse_unary()
+            left = BinOp(op, left, right)
+        return left
+
+    def parse_unary(self):
+        if self.peek().kind == 'OP' and self.peek().value == '-':
+            op = self.advance().value
+            operand = self.parse_unary()
+            return UnaryOp(op, operand)
+        if self.peek().kind == 'NOT':
+            self.advance()
+            operand = self.parse_unary()
+            return UnaryOp('not', operand)
+        return self.parse_postfix()
+
+    def parse_postfix(self):
+        node = self.parse_primary()
+        while True:
+            if self.peek().kind == 'DOT':
+                self.advance()
+                attr = self.expect('IDENT').value
+                node = DotExpr(node, attr)
+            elif self.peek().kind == 'OPTDOT':
+                self.advance()
+                attr = self.expect('IDENT').value
+                node = OptDotExpr(node, attr)
+            elif self.peek().kind == 'LPAREN':
+                args = self.parse_args()
+                node = CallExpr(node, args)
+            elif self.peek().kind == 'LBRACK':
+                self.advance()
+                index = self.parse_expr()
+                self.expect('RBRACK')
+                node = IndexExpr(node, index)
+            else:
+                break
+        return node
+
+    def parse_args(self):
+        self.expect('LPAREN')
+        args = []
+        while self.peek().kind != 'RPAREN':
+            args.append(self.parse_expr())
+            if self.peek().kind == 'COMMA':
+                self.advance()
+        self.expect('RPAREN')
+        return args
+
+    def _is_arrow_func(self):
+        pos = self.pos + 1
+        depth = 1
+        while pos < len(self.tokens):
+            k = self.tokens[pos].kind
+            if k == 'LPAREN':
+                depth += 1
+            elif k == 'RPAREN':
+                depth -= 1
+                if depth == 0:
+                    next_pos = pos + 1
+                    while next_pos < len(self.tokens) and self.tokens[next_pos].kind == 'NEWLINE':
+                        next_pos += 1
+                    if next_pos < len(self.tokens) and self.tokens[next_pos].kind == 'FATARROW':
+                        return True
+                    return False
+            pos += 1
+        return False
+
+    def parse_primary(self):
+        t = self.peek()
+        if t.kind == 'NUMBER':
+            self.advance()
+            return Literal(t.value)
+        elif t.kind == 'STRING':
+            self.advance()
+            return self._parse_interpolated_string(t.value)
+        elif t.kind == 'TRUE':
+            self.advance()
+            return Literal(True)
+        elif t.kind == 'FALSE':
+            self.advance()
+            return Literal(False)
+        elif t.kind == 'NULL' or t.kind == 'NONE':
+            self.advance()
+            return Literal(None)
+        elif t.kind == 'IDENT':
+            if self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1].kind == 'LBRACE' and self._looks_like_struct_init():
+                return self.parse_struct_init()
+            if self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1].kind == 'FATARROW':
+                param = self.advance().value
+                self.expect('FATARROW')
+                if self.peek().kind == 'LBRACE':
+                    body = self.parse_block()
+                else:
+                    body = [ReturnStmt(self.parse_expr())]
+                return FnExpr([param], body)
+            self.advance()
+            return Ident(t.value)
+        elif t.kind == 'FN':
+            return self.parse_fn_expr()
+        elif t.kind == 'LBRACK':
+            return self.parse_array()
+        elif t.kind == 'LBRACE':
+            return self.parse_map()
+        elif t.kind == 'LPAREN':
+            if self._is_arrow_func():
+                params = self.parse_params()
+                self.expect('FATARROW')
+                if self.peek().kind == 'LBRACE':
+                    body = self.parse_block()
+                else:
+                    body = [ReturnStmt(self.parse_expr())]
+                return FnExpr(params, body)
+            self.advance()
+            expr = self.parse_expr()
+            self.expect('RPAREN')
+            return expr
+        else:
+            raise SyntaxError(f"unexpected token {t.kind} ({t.value!r}) at line {t.line}")
+
+    def _parse_interpolated_string(self, raw):
+        """handle ${expr} inside strings"""
+        parts = []
+        i = 0
+        buf = []
+        while i < len(raw):
+            if raw[i] == '$' and i+1 < len(raw) and raw[i+1] == '{':
+                if buf:
+                    parts.append(''.join(buf))
+                    buf = []
+                # find matching }
+                depth = 0
+                j = i + 2
+                while j < len(raw):
+                    if raw[j] == '{': depth += 1
+                    elif raw[j] == '}':
+                        if depth == 0: break
+                        depth -= 1
+                    j += 1
+                expr_src = raw[i+2:j]
+                # parse the expression
+                toks = tokenize(expr_src)
+                p = Parser(toks)
+                parts.append(p.parse_expr())
+                i = j + 1
+            elif raw[i] == '\\' and i+1 < len(raw):
+                esc = {'n': '\n', 't': '\t', '\\': '\\', '"': '"'}
+                buf.append(esc.get(raw[i+1], raw[i+1]))
+                i += 2
+            else:
+                buf.append(raw[i])
+                i += 1
+        if buf:
+            parts.append(''.join(buf))
+        if len(parts) == 1 and isinstance(parts[0], str):
+            return Literal(parts[0])
+        return InterpolatedString(parts)
+
+    def _looks_like_struct_init(self):
+        """IDENT { ... } is a struct init only if the body looks like fields, not a block."""
+        pos = self.pos + 2
+        while pos < len(self.tokens) and self.tokens[pos].kind == 'NEWLINE':
+            pos += 1
+        if pos >= len(self.tokens):
+            return False
+        k = self.tokens[pos].kind
+        if k in ('CASE', 'DEFAULT', 'LET', 'CONST', 'FN', 'IF', 'WHILE', 'FOR',
+                 'RETURN', 'PRINT', 'MATCH', 'SWITCH', 'TRY', 'THROW', 'DEFER',
+                 'BREAK', 'CONTINUE', 'STRUCT', 'IMPORT', 'COMPONENT'):
+            return False
+        if k == 'RBRACE':
+            return True
+        if k == 'IDENT':
+            nxt = pos + 1
+            while nxt < len(self.tokens) and self.tokens[nxt].kind == 'NEWLINE':
+                nxt += 1
+            return nxt < len(self.tokens) and self.tokens[nxt].kind in ('COLON', 'COMMA', 'RBRACE')
+        return False
+
+    def parse_array(self):
+        self.expect('LBRACK')
+        if self.peek().kind == 'RBRACK':
+            self.advance()
+            return ArrayLiteral([])
+        first = self.parse_expr()
+        if self.peek().kind == 'FOR':
+            self.advance()
+            var = self.expect('IDENT').value
+            self.expect('IN')
+            iterable = self.parse_expr()
+            condition = None
+            if self.peek().kind == 'IF':
+                self.advance()
+                condition = self.parse_expr()
+            self.expect('RBRACK')
+            return ArrayComprehension(first, var, iterable, condition)
+        elems = [first]
+        if self.peek().kind == 'COMMA':
+            self.advance()
+        while self.peek().kind != 'RBRACK':
+            elems.append(self.parse_expr())
+            if self.peek().kind == 'COMMA':
+                self.advance()
+        self.expect('RBRACK')
+        return ArrayLiteral(elems)
+
+    def parse_map(self):
+        self.expect('LBRACE')
+        self.skip_newlines()
+        if self.peek().kind == 'RBRACE':
+            self.advance()
+            return MapLiteral([])
+        key = self.parse_expr()
+        if isinstance(key, Ident):
+            key = Literal(key.name)
+        self.expect('COLON')
+        value = self.parse_expr()
+        if self.peek().kind == 'FOR':
+            self.advance()
+            var = self.expect('IDENT').value
+            self.expect('IN')
+            iterable = self.parse_expr()
+            condition = None
+            if self.peek().kind == 'IF':
+                self.advance()
+                condition = self.parse_expr()
+            self.expect('RBRACE')
+            return MapComprehension(key, value, var, iterable, condition)
+        pairs = [(key, value)]
+        if self.peek().kind == 'COMMA':
+            self.advance()
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            key = self.parse_expr()
+            if isinstance(key, Ident):
+                key = Literal(key.name)
+            self.expect('COLON')
+            val = self.parse_expr()
+            pairs.append((key, val))
+            if self.peek().kind == 'COMMA':
+                self.advance()
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return MapLiteral(pairs)
+
+    def parse_struct_init(self):
+        """Parse struct initialization: StructName { field: value, ... }"""
+        name = self.expect('IDENT').value
+        self.expect('LBRACE')
+        fields = []
+        self.skip_newlines()
+        while self.peek().kind != 'RBRACE':
+            field = self.expect('IDENT').value
+            self.expect('COLON')
+            value = self.parse_expr()
+            fields.append((field, value))
+            if self.peek().kind == 'COMMA':
+                self.advance()
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return StructInitExpr(name, fields)
+
+
+# ── evaluator ──
+class Env:
+    def __init__(self, parent=None):
+        self.vars = {}
+        self.consts = set()
+        self.parent = parent
+
+    def get(self, name):
+        if name in self.vars:
+            return self.vars[name]
+        if self.parent:
+            return self.parent.get(name)
+        raise RuntimeError(f"undefined variable '{name}'")
+
+    def set(self, name, val, is_const=False):
+        self.vars[name] = val
+        if is_const:
+            self.consts.add(name)
+        elif name in self.consts:
+            self.consts.discard(name)
+
+    def assign(self, name, val):
+        """assign to existing variable, walking up scopes"""
+        if name in self.consts:
+            raise RuntimeError(f"cannot reassign constant '{name}'")
+        if name in self.vars:
+            self.vars[name] = val
+            return
+        if self.parent:
+            self.parent.assign(name, val)
+            return
+        # create in current scope if not found
+        self.vars[name] = val
+
+
+class LumpoFunction:
+    def __init__(self, params, body, closure):
+        self.params = params
+        self.body = body
+        self.closure = closure
+        self._bound = None
+
+    def bind(self, recv):
+        fn = LumpoFunction(self.params, self.body, self.closure)
+        fn._bound = recv
+        return fn
+
+    def __call__(self, *args):
+        params = self.params
+        call_args = args
+        if self._bound is not None:
+            if not params:
+                raise RuntimeError("method receiver is missing")
+            params = params[1:]
+        if len(call_args) != len(params):
+            raise RuntimeError(f"expected {len(params)} arguments, got {len(call_args)}")
+        env = Env(self.closure)
+        if self._bound is not None:
+            env.set(self.params[0], self._bound)
+        for p, a in zip(params, call_args):
+            env.set(p, a)
+        try:
+            return exec_block(self.body, env)
+        except ReturnSignal as r:
+            return r.value
+
+
+class LumpoStructType:
+    def __init__(self, name, fields):
+        self.name = name
+        self.fields = list(fields)
+        self.methods = {}
+
+
+class LumpoStruct:
+    def __init__(self, stype, fields):
+        self._type = stype
+        self._fields = dict(fields)
+
+    def __getattr__(self, name):
+        if name in ('_type', '_fields'):
+            return object.__getattribute__(self, name)
+        if name in self._fields:
+            return self._fields[name]
+        meth = self._type.methods.get(name)
+        if meth is not None:
+            return meth.bind(self)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, val):
+        if name in ('_type', '_fields'):
+            object.__setattr__(self, name, val)
+            return
+        self._fields[name] = val
+
+    def __eq__(self, other):
+        return isinstance(other, LumpoStruct) and self._type.name == other._type.name and self._fields == other._fields
+
+
+def _match_pattern(pattern, val, bind_env, eval_env):
+    if isinstance(pattern, Literal):
+        return eval_expr(pattern, eval_env) == val
+    if isinstance(pattern, Ident):
+        bind_env.set(pattern.name, val)
+        return True
+    if isinstance(pattern, StructPattern):
+        if not isinstance(val, LumpoStruct) or val._type.name != pattern.name:
+            return False
+        for field, expected in pattern.fields:
+            if field not in val._fields:
+                return False
+            actual = val._fields[field]
+            if expected is None:
+                bind_env.set(field, actual)
+            elif not _match_pattern(expected, actual, bind_env, eval_env):
+                return False
+        return True
+    try:
+        return eval_expr(pattern, eval_env) == val
+    except Exception:
+        return False
+
+
+def _exec_match_body(body, env):
+    if isinstance(body, list):
+        return exec_block(body, env)
+    if isinstance(body, PrintStmt):
+        exec_stmt(body, env)
+    else:
+        return eval_expr(body, env)
+
+
+
+class LumpoComponent:
+    """a component is just a function that returns HTML string"""
+    def __init__(self, name, params, body, closure):
+        self.name = name
+        self.params = params
+        self.body = body
+        self.closure = closure
+
+    def __call__(self, *args):
+        if len(args) != len(self.params):
+            raise RuntimeError(f"expected {len(self.params)} arguments, got {len(args)}")
+        env = Env(self.closure)
+        for p, a in zip(self.params, args):
+            env.set(p, a)
+        try:
+            return exec_block(self.body, env)
+        except ReturnSignal as r:
+            return r.value
+
+
+def _lumpo_str(val):
+    if val is None:
+        return "null"
+    return str(val)
+
+def exec_block(stmts, env):
+    result = None
+    defers = []
+    try:
+        for s in stmts:
+            if isinstance(s, DeferStmt):
+                defers.append(s.stmt)
+                continue
+            try:
+                result = exec_stmt(s, env)
+            except ReturnSignal:
+                raise
+            except (RuntimeError, AssertionError) as e:
+                line = getattr(s, '_line', None)
+                if line and '(line ' not in str(e) and 'assertion failed' not in str(e):
+                    raise RuntimeError(f"{e} (line {line})") from e
+                raise
+        return result
+    finally:
+        for d_stmt in reversed(defers):
+            try:
+                exec_stmt(d_stmt, env)
+            except ReturnSignal:
+                pass
+
+
+def exec_stmt(node, env):
+    if isinstance(node, LetStmt):
+        env.set(node.name, eval_expr(node.expr, env), is_const=node.is_const)
+    elif isinstance(node, DestructureArrayStmt):
+        val = eval_expr(node.expr, env)
+        if not isinstance(val, (list, tuple)):
+            val = list(val) if hasattr(val, '__iter__') else [val]
+        for i, name in enumerate(node.names):
+            item = val[i] if i < len(val) else None
+            env.set(name, item, is_const=node.is_const)
+    elif isinstance(node, DestructureMapStmt):
+        val = eval_expr(node.expr, env)
+        if not isinstance(val, dict):
+            val = {}
+        for name in node.names:
+            item = val.get(name) if isinstance(val, dict) else None
+            env.set(name, item, is_const=node.is_const)
+    elif isinstance(node, DotAssignStmt):
+        obj = eval_expr(node.obj, env)
+        if isinstance(obj, LumpoStruct):
+            if node.field not in obj._type.fields:
+                raise RuntimeError(f"unknown field '{node.field}'")
+            if node.op != '=':
+                cur = obj._fields[node.field]
+                if node.op == '+=':
+                    val = cur + eval_expr(node.expr, env)
+                elif node.op == '-=':
+                    val = cur - eval_expr(node.expr, env)
+                elif node.op == '*=':
+                    val = cur * eval_expr(node.expr, env)
+                elif node.op == '/=':
+                    cur = obj._fields[node.field]
+                    val = cur / eval_expr(node.expr, env)
+                    if isinstance(cur, int) and isinstance(val, float) and val.is_integer():
+                        val = int(val)
+                elif node.op == '%=':
+                    val = cur % eval_expr(node.expr, env)
+                else:
+                    raise RuntimeError(f"unsupported assignment operator '{node.op}'")
+            else:
+                val = eval_expr(node.expr, env)
+            obj._fields[node.field] = val
+        elif isinstance(obj, dict):
+            obj[node.field] = eval_expr(node.expr, env)
+        else:
+            raise RuntimeError(f"cannot assign field on {type(obj).__name__}")
+    elif isinstance(node, AssignStmt):
+        val = eval_expr(node.expr, env)
+        if node.op != '=':
+            cur = env.get(node.name)
+            if node.op == '+=':
+                val = cur + val
+            elif node.op == '-=':
+                val = cur - val
+            elif node.op == '*=':
+                val = cur * val
+            elif node.op == '/=':
+                val = cur / val
+                if isinstance(cur, int) and isinstance(val, float) and val.is_integer():
+                    val = int(val)
+            elif node.op == '%=':
+                val = cur % val
+        env.assign(node.name, val)
+    elif isinstance(node, PrintStmt):
+        val = eval_expr(node.expr, env)
+        print(_lumpo_str(val))
+    elif isinstance(node, ImportStmt):
+        mod = _import_mod(node.module)
+        if node.module.endswith('.lp'):
+            env.set(Path(node.module).stem, mod)
+        else:
+            env.set(node.module, mod)
+        for k, v in vars(mod).items():
+            if not k.startswith('_'):
+                env.set(k, v)
+    elif isinstance(node, FnDef):
+        fn = LumpoFunction(node.params, node.body, env)
+        env.set(node.name, fn)
+    elif isinstance(node, ComponentDef):
+        comp = LumpoComponent(node.name, node.params, node.body, env)
+        env.set(node.name, comp)
+    elif isinstance(node, ReturnStmt):
+        val = eval_expr(node.expr, env)
+        raise ReturnSignal(val)
+    elif isinstance(node, IfStmt):
+        cond = eval_expr(node.cond, env)
+        if cond:
+            try:
+                exec_block(node.body, Env(env))
+            except ReturnSignal:
+                raise
+        elif node.else_body:
+            try:
+                exec_block(node.else_body, Env(env))
+            except ReturnSignal:
+                raise
+    elif isinstance(node, WhileStmt):
+        while eval_expr(node.cond, env):
+            try:
+                exec_block(node.body, Env(env))
+            except ReturnSignal:
+                raise
+            except BreakSignal:
+                break
+            except ContinueSignal:
+                continue
+    elif isinstance(node, ForStmt):
+        iterable = eval_expr(node.iterable, env)
+        for item in iterable:
+            child = Env(env)
+            child.set(node.var, item)
+            try:
+                exec_block(node.body, child)
+            except ReturnSignal:
+                raise
+            except BreakSignal:
+                break
+            except ContinueSignal:
+                continue
+    elif isinstance(node, SwitchStmt):
+        val = eval_expr(node.expr, env)
+        matched = False
+        for case_val, case_body in node.cases:
+            if eval_expr(case_val, env) == val:
+                matched = True
+                try:
+                    exec_block(case_body, Env(env))
+                except ReturnSignal:
+                    raise
+                break
+        if not matched and node.default is not None:
+            try:
+                exec_block(node.default, Env(env))
+            except ReturnSignal:
+                raise
+    elif isinstance(node, BreakStmt):
+        raise BreakSignal()
+    elif isinstance(node, ContinueStmt):
+        raise ContinueSignal()
+    elif isinstance(node, TryStmt):
+        try:
+            exec_block(node.body, Env(env))
+        except ThrowSignal as t:
+            if node.catch_body is not None:
+                cenv = Env(env)
+                if node.catch_var:
+                    cenv.set(node.catch_var, t.value)
+                try:
+                    exec_block(node.catch_body, cenv)
+                except ReturnSignal:
+                    raise
+        except ReturnSignal:
+            raise
+        except (RuntimeError, AssertionError, ZeroDivisionError, TypeError,
+                KeyError, IndexError, ValueError) as e:
+            if node.catch_body is not None:
+                cenv = Env(env)
+                if node.catch_var:
+                    cenv.set(node.catch_var, str(e))
+                try:
+                    exec_block(node.catch_body, cenv)
+                except ReturnSignal:
+                    raise
+            else:
+                raise
+    elif isinstance(node, ThrowStmt):
+        raise ThrowSignal(eval_expr(node.expr, env))
+    elif isinstance(node, StructStmt):
+        env.set(node.name, LumpoStructType(node.name, node.fields))
+    elif isinstance(node, MethodDef):
+        stype = env.get(node.struct_name) if node.struct_name else None
+        if not isinstance(stype, LumpoStructType):
+            raise RuntimeError(f"cannot attach method '{node.name}' to unknown struct '{node.struct_name}'")
+        stype.methods[node.name] = LumpoFunction([node.receiver] + node.params, node.body, env)
+    elif isinstance(node, MatchStmt):
+        val = eval_expr(node.expr, env)
+        matched = False
+        for pattern, body in node.cases:
+            if pattern == 'default':
+                continue
+            child = Env(env)
+            if _match_pattern(pattern, val, child, env):
+                matched = True
+                _exec_match_body(body, child)
+                break
+        if not matched:
+            for pattern, body in node.cases:
+                if pattern == 'default':
+                    _exec_match_body(body, Env(env))
+                    break
+    elif isinstance(node, ExprStmt):
+        eval_expr(node.expr, env)
+    else:
+        raise RuntimeError(f"unknown statement: {type(node).__name__}")
+
+
+def eval_expr(node, env):
+    if isinstance(node, Literal):
+        return node.value
+    elif isinstance(node, Ident):
+        return env.get(node.name)
+    elif isinstance(node, InterpolatedString):
+        parts = []
+        for p in node.parts:
+            if isinstance(p, str):
+                parts.append(p)
+            else:
+                parts.append(_lumpo_str(eval_expr(p, env)))
+        return ''.join(parts)
+    elif isinstance(node, ArrayLiteral):
+        return [eval_expr(e, env) for e in node.elements]
+    elif isinstance(node, MapLiteral):
+        return {eval_expr(k, env): eval_expr(v, env) for k, v in node.pairs}
+    elif isinstance(node, PipeExpr):
+        left_val = eval_expr(node.left, env)
+        if isinstance(node.right, CallExpr):
+            callee = eval_expr(node.right.callee, env)
+            args = [left_val] + [eval_expr(a, env) for a in node.right.args]
+            return callee(*args)
+        else:
+            func = eval_expr(node.right, env)
+            return func(left_val)
+    elif isinstance(node, BinOp):
+        left = eval_expr(node.left, env)
+        right = eval_expr(node.right, env)
+        ops = {
+            '+': lambda a, b: a + b,
+            '-': lambda a, b: a - b,
+            '*': lambda a, b: a * b,
+            '/': lambda a, b: a / b,
+            '//': lambda a, b: a // b,
+            '%': lambda a, b: a % b,
+            '==': lambda a, b: a == b,
+            '!=': lambda a, b: a != b,
+            '<': lambda a, b: a < b,
+            '>': lambda a, b: a > b,
+            '<=': lambda a, b: a <= b,
+            '>=': lambda a, b: a >= b,
+            '&&': lambda a, b: a and b,
+            '||': lambda a, b: a or b,
+            'and': lambda a, b: a and b,
+            'or': lambda a, b: a or b,
+        }
+        res = ops[node.op](left, right)
+        if node.op == '/' and isinstance(res, float) and res.is_integer():
+            return int(res)
+        return res
+    elif isinstance(node, UnaryOp):
+        val = eval_expr(node.operand, env)
+        if node.op == '-':
+            return -val
+        if node.op == 'not':
+            return not val
+    elif isinstance(node, Ternary):
+        cond = eval_expr(node.cond, env)
+        return eval_expr(node.if_true if cond else node.if_false, env)
+    elif isinstance(node, NullCoalesce):
+        left = eval_expr(node.left, env)
+        if left is None:
+            return eval_expr(node.right, env)
+        return left
+    elif isinstance(node, CallExpr):
+        callee = eval_expr(node.callee, env)
+        args = [eval_expr(a, env) for a in node.args]
+        if callee is None:
+            raise RuntimeError("attempted to call None")
+        return callee(*args)
+    elif isinstance(node, DotExpr):
+        obj = eval_expr(node.obj, env)
+        # Check SimpleNamespace first (imported modules)
+        if hasattr(obj, node.attr):
+            return getattr(obj, node.attr)
+        if isinstance(obj, dict) and node.attr in obj:
+            return obj[node.attr]
+        raise RuntimeError(f"no attribute '{node.attr}' on {type(obj).__name__}")
+    elif isinstance(node, OptDotExpr):
+        obj = eval_expr(node.obj, env)
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(node.attr, None)
+        if hasattr(obj, node.attr):
+            return getattr(obj, node.attr)
+        return None
+    elif isinstance(node, IndexExpr):
+        obj = eval_expr(node.obj, env)
+        idx = eval_expr(node.index, env)
+        return obj[idx]
+    elif isinstance(node, FnExpr):
+        return LumpoFunction(node.params, node.body, env)
+    elif isinstance(node, StructInitExpr):
+        stype = env.get(node.name)
+        if not isinstance(stype, LumpoStructType):
+            raise RuntimeError(f"'{node.name}' is not a struct")
+        fields = {name: eval_expr(val, env) for name, val in node.fields}
+        unknown = [name for name in fields if name not in stype.fields]
+        if unknown:
+            raise RuntimeError(f"unknown field '{unknown[0]}'")
+        missing = [name for name in stype.fields if name not in fields]
+        if missing:
+            raise RuntimeError(f"missing required field '{missing[0]}'")
+        return LumpoStruct(stype, fields)
+    elif isinstance(node, ArrayComprehension):
+        iterable = eval_expr(node.iterable, env)
+        result = []
+        for item in iterable:
+            child = Env(env)
+            child.set(node.var, item)
+            if node.condition is None or eval_expr(node.condition, child):
+                result.append(eval_expr(node.expr, child))
+        return result
+    elif isinstance(node, MapComprehension):
+        iterable = eval_expr(node.iterable, env)
+        result = {}
+        for item in iterable:
+            child = Env(env)
+            child.set(node.var, item)
+            if node.condition is None or eval_expr(node.condition, child):
+                result[eval_expr(node.key, child)] = eval_expr(node.value, child)
+        return result
+    else:
+        raise RuntimeError(f"unknown expression: {type(node).__name__}")
+
+
+# ── builtins ──
+def _builtin_range(*args):
+    return list(range(*[int(a) for a in args]))
+
+def _builtin_len(x):
+    return len(x)
+
+def _builtin_floor_div(a, b):
+    return a // b
+
+def _builtin_str(x):
+    return str(x)
+
+def _builtin_int(x):
+    return int(x)
+
+def _builtin_float(x):
+    return float(x)
+
+def _builtin_type(x):
+    return type(x).__name__
+
+def _builtin_append(lst, val):
+    lst.append(val)
+    return lst
+
+def _builtin_keys(m):
+    return list(m.keys())
+
+def _builtin_values(m):
+    return list(m.values())
+
+def _builtin_assert(cond, msg="assertion failed"):
+    if not cond:
+        raise AssertionError(str(msg))
+    return None
+
+def _builtin_push(lst, val):
+    lst.append(val)
+    return None
+
+def _builtin_pop(lst):
+    return lst.pop()
+
+def _builtin_has(m, key):
+    return key in m
+
+def _builtin_split(s, sep=" "):
+    return s.split(sep)
+
+def _builtin_join(lst, sep=" "):
+    return sep.join([str(x) for x in lst])
+
+def _builtin_upper(s):
+    return str(s).upper()
+
+def _builtin_lower(s):
+    return str(s).lower()
+
+def _builtin_trim(s):
+    return str(s).strip()
+
+def _builtin_substr(s, start, length=None):
+    if length is None:
+        return s[start:]
+    return s[start:start + length]
+
+def _builtin_replace(s, old, new):
+    return str(s).replace(old, new)
+
+def _builtin_contains(haystack, needle):
+    if isinstance(haystack, dict):
+        return needle in haystack
+    return str(needle) in str(haystack)
+
+def _builtin_starts_with(s, prefix):
+    return str(s).startswith(str(prefix))
+
+def _builtin_ends_with(s, suffix):
+    return str(s).endswith(str(suffix))
+
+def _builtin_repeat(s, n):
+    return str(s) * int(n)
+
+def _builtin_pad_left(s, width, fill=' '):
+    return str(s).rjust(int(width), str(fill)[0] if str(fill) else ' ')
+
+def _builtin_index_of(s, needle, start=0):
+    s, needle, start = str(s), str(needle), int(start)
+    try:
+        return s.index(needle, start)
+    except ValueError:
+        return -1
+
+def _builtin_has_key(m, key):
+    return key in m
+
+def _builtin_min_(*args):
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        return min(args[0])
+    return min(args)
+
+def _builtin_max_(*args):
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        return max(args[0])
+    return max(args)
+
+def _builtin_abs_(x):
+    return abs(x)
+
+def _builtin_reverse(lst):
+    return list(reversed(lst))
+
+def _builtin_sort(lst):
+    return sorted(lst)
+
+def _builtin_map_(items, fn):
+    if not callable(fn):
+        raise RuntimeError("map: second argument must be a function")
+    return [fn(x) for x in items]
+
+def _builtin_filter_(items, pred):
+    if not callable(pred):
+        raise RuntimeError("filter: second argument must be a function")
+    return [x for x in items if pred(x)]
+
+def _builtin_reduce_(items, fn, init=None):
+    if not callable(fn):
+        raise RuntimeError("reduce: second argument must be a function")
+    it = iter(items)
+    acc = init if init is not None else next(it)
+    for x in it:
+        acc = fn(acc, x)
+    return acc
+
+def _builtin_find_(items, pred):
+    if not callable(pred):
+        raise RuntimeError("find: second argument must be a function")
+    for x in items:
+        if pred(x):
+            return x
+    return None
+
+def _builtin_any_(items, pred):
+    if not callable(pred):
+        raise RuntimeError("any: second argument must be a function")
+    for x in items:
+        if pred(x):
+            return True
+    return False
+
+def _builtin_all_(items, pred):
+    if not callable(pred):
+        raise RuntimeError("all: second argument must be a function")
+    for x in items:
+        if not pred(x):
+            return False
+    return True
+
+def make_global_env():
+    env = Env()
+    env.set('range', _builtin_range)
+    env.set('len', _builtin_len)
+    env.set('str', _builtin_str)
+    env.set('int', _builtin_int)
+    env.set('float', _builtin_float)
+    env.set('type', _builtin_type)
+    env.set('append', _builtin_append)
+    env.set('keys', _builtin_keys)
+    env.set('values', _builtin_values)
+    env.set('floor_div', _builtin_floor_div)
+    env.set('assert', _builtin_assert)
+    env.set('push', _builtin_push)
+    env.set('pop', _builtin_pop)
+    env.set('has', _builtin_has)
+    env.set('split', _builtin_split)
+    env.set('join', _builtin_join)
+    env.set('upper', _builtin_upper)
+    env.set('lower', _builtin_lower)
+    env.set('trim', _builtin_trim)
+    env.set('substr', _builtin_substr)
+    env.set('replace', _builtin_replace)
+    env.set('contains', _builtin_contains)
+    env.set('starts_with', _builtin_starts_with)
+    env.set('ends_with', _builtin_ends_with)
+    env.set('repeat', _builtin_repeat)
+    env.set('pad_left', _builtin_pad_left)
+    env.set('index_of', _builtin_index_of)
+    env.set('has_key', _builtin_has_key)
+    env.set('min', _builtin_min_)
+    env.set('max', _builtin_max_)
+    env.set('abs', _builtin_abs_)
+    env.set('reverse', _builtin_reverse)
+    env.set('sort', _builtin_sort)
+    env.set('map', _builtin_map_)
+    env.set('filter', _builtin_filter_)
+    env.set('reduce', _builtin_reduce_)
+    env.set('find', _builtin_find_)
+    env.set('any', _builtin_any_)
+    env.set('all', _builtin_all_)
+    env.set('true', True)
+    env.set('false', False)
+    env.set('null', None)
+    env.set('none', None)
+    return env
+
+
+# ── main ──
+def _format_error_frame(path, line_no, msg):
+    """render a rust-style error frame with source context"""
+    try:
+        src_lines = Path(path).read_text().splitlines()
+    except OSError:
+        src_lines = []
+    out = [f"error: {msg}", f" --> {path} (line {line_no})"]
+    if isinstance(line_no, int) and 0 < line_no <= len(src_lines):
+        src = src_lines[line_no - 1]
+        width = len(str(line_no)) + 2
+        out.append(f"{' ' * width} |")
+        out.append(f"{line_no} | {src}")
+        out.append(f"{' ' * width} | {'^'}")
+    return '\n'.join(out)
+
+
+def run_file(path):
+    global _current_file
+    src = Path(path).read_text()
+    _current_file = str(Path(path).resolve())
+    try:
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+    except SyntaxError as e:
+        line_no = 1
+        m = re.search(r'line (\d+)', str(e))
+        if m:
+            line_no = int(m.group(1))
+        print(_format_error_frame(path, line_no, str(e)), file=sys.stderr)
+        sys.exit(1)
+    env = make_global_env()
+    try:
+        exec_block(ast.stmts, env)
+    except AssertionError as e:
+        line_no = '?'
+        m = re.search(r'line (\d+)', str(e))
+        if m:
+            line_no = int(m.group(1))
+        print(_format_error_frame(path, line_no, f"AssertionError: {e}"), file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as e:
+        line_no = '?'
+        m = re.search(r'\(line (\d+)\)', str(e))
+        if m:
+            line_no = int(m.group(1))
+        print(_format_error_frame(path, line_no, str(e)), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(_format_error_frame(path, '?', str(e)), file=sys.stderr)
+        sys.exit(1)
+
+
+def repl():
+    print(f"lumpo v{LUMPO_VERSION} REPL — type 'exit' to quit")
+    env = make_global_env()
+    while True:
+        try:
+            line = input("lumpo> ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if line.strip() == 'exit':
+            break
+        if not line.strip():
+            continue
+        try:
+            tokens = tokenize(line)
+            ast = Parser(tokens).parse()
+            for s in ast.stmts:
+                result = exec_stmt(s, env)
+        except Exception as e:
+            print(f"error: {e}")
+
+
+def fmt_file(path):
+    src = Path(path).read_text()
+    # protect string literals from spacing rewrites
+    placeholders = {}
+    def _stash(m):
+        key = f"\x00{len(placeholders)}\x00"
+        placeholders[key] = m.group(0)
+        return key
+    protected = re.sub(r'"(?:[^"\\]|\\.)*"', _stash, src)
+    protected = re.sub(r'\s*=\s*', ' = ', protected)
+    protected = re.sub(r'\s*([+\-*/])\s*', r' \1 ', protected)
+    protected = re.sub(r',\s*', ', ', protected)
+    protected = re.sub(r'\b(let|fn|return|if|else|while|for|in|import|print|component)\s+',
+                       r'\1 ', protected)
+    protected = re.sub(r'\)\s*\{', ') {', protected)
+    protected = re.sub(r'[ \t]+', ' ', protected)
+    for key, val in placeholders.items():
+        protected = protected.replace(key, val)
+    lines = protected.split('\n')
+    out = []
+    indent = 0
+    for raw in lines:
+        line = raw.strip()
+        if line == '':
+            out.append('')
+            continue
+        if line.startswith('}'):
+            indent = max(0, indent - 1)
+        out.append('    ' * indent + line)
+        if '{' in line:
+            indent += 1
+        elif '}' in line and not line.startswith('}'):
+            indent = max(0, indent - 1)
+    formatted = '\n'.join(out)
+    Path(path).write_text(formatted)
+    return formatted
+
+
+def run_tests(path=None):
+    """discover and run *_test.lp / test_*.lp files."""
+    root = Path(path) if path else Path('.')
+    if root.is_file():
+        test_files = [root]
+    else:
+        pattern_paths = list(root.glob('**/*_test.lp')) + list(root.glob('**/test_*.lp'))
+        test_files = sorted(set(pattern_paths))
+    if not test_files:
+        print("no test files found (*_test.lp / test_*.lp)")
+        return 0
+    passed, failed = 0, 0
+    for tf in test_files:
+        src = tf.read_text()
+        # a test file passes if it runs without uncaught errors/assert failures
+        try:
+            tokens = tokenize(src)
+            ast = Parser(tokens).parse()
+            env = make_global_env()
+            import io as _io
+            buf = _io.StringIO()
+            import contextlib
+            with contextlib.redirect_stdout(buf):
+                exec_block(ast.stmts, env)
+            print(f"PASS {tf}")
+            passed += 1
+        except Exception as e:
+            print(f"FAIL {tf}: {e}")
+            failed += 1
+    total = passed + failed
+    print(f"\n{total} test file(s): {passed} passed, {failed} failed")
+    return 1 if failed else 0
+
+
+def dev_watch(path):
+    """run a file, restart on any .lp change (polling watcher)."""
+    import subprocess as _sp
+    import time as _time
+
+    def _snapshot():
+        snaps = {}
+        for f in Path('.').rglob('*.lp'):
+            try:
+                snaps[str(f)] = f.stat().st_mtime
+            except OSError:
+                pass
+        return snaps
+
+    proc = None
+    last = _snapshot()
+    print(f"lumpo dev: watching *.lp (ctrl-c to stop)")
+    try:
+        while True:
+            if proc is None or proc.poll() is not None:
+                if proc is not None:
+                    print("lumpo dev: process exited, waiting for changes...")
+                proc = _sp.Popen([sys.executable, str(Path(__file__).resolve()), 'run', path])
+            _time.sleep(0.5)
+            now = _snapshot()
+            if now != last:
+                changed = [k for k in set(now) | set(last) if now.get(k) != last.get(k)]
+                print(f"lumpo dev: change detected ({', '.join(changed[:3])}), restarting...")
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        proc.kill()
+                proc = _sp.Popen([sys.executable, str(Path(__file__).resolve()), 'run', path])
+                last = now
+    except KeyboardInterrupt:
+        print("\nlumpo dev: stopped")
+        if proc and proc.poll() is None:
+            proc.terminate()
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: lumpo <command> [args]")
+        print("commands:")
+        print("  run <file.lp>    run a lumpo program")
+        print("  repl             interactive REPL")
+        print("  build <src> <out> build static site")
+        print("  fmt <file.lp>    format source file in place")
+        print("  test [path]      run *_test.lp / test_*.lp files")
+        print("  dev <file.lp>    run + auto-restart on .lp changes")
+        print("  --version        show version")
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+
+    if cmd == '--version':
+        print(f"lumpo v{LUMPO_VERSION}")
+        sys.exit(0)
+
+    if cmd == 'run':
+        if len(sys.argv) < 3:
+            print("usage: lumpo run <file.lp>")
+            sys.exit(1)
+        run_file(sys.argv[2])
+    elif cmd == 'repl':
+        repl()
+    elif cmd == 'fmt':
+        if len(sys.argv) < 3:
+            print("usage: lumpo fmt <file.lp>")
+            sys.exit(1)
+        fmt_file(sys.argv[2])
+        print(f"formatted {sys.argv[2]}")
+    elif cmd == 'test':
+        target = sys.argv[2] if len(sys.argv) > 2 else None
+        sys.exit(run_tests(target))
+    elif cmd == 'dev':
+        if len(sys.argv) < 3:
+            print("usage: lumpo dev <file.lp>")
+            sys.exit(1)
+        dev_watch(sys.argv[2])
+    elif cmd == 'build':
+        # static site generator
+        if len(sys.argv) < 4:
+            print("usage: lumpo build <src_dir> <out_dir>")
+            sys.exit(1)
+        src_dir = Path(sys.argv[2])
+        out_dir = Path(sys.argv[3])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        count = 0
+        for lp_file in src_dir.glob('*.lp'):
+            tokens = tokenize(lp_file.read_text())
+            ast = Parser(tokens).parse()
+            env = make_global_env()
+            # capture output
+            import io as _io
+            buf = _io.StringIO()
+            old_print = __builtins__['print'] if isinstance(__builtins__, dict) else __builtins__.print
+            def _cap_print(*a, **kw):
+                buf.write(' '.join(str(x) for x in a))
+                buf.write(kw.get('end', '\n'))
+            if isinstance(__builtins__, dict):
+                __builtins__['print'] = _cap_print
+            else:
+                __builtins__.print = _cap_print
+            try:
+                exec_block(ast.stmts, env)
+            finally:
+                if isinstance(__builtins__, dict):
+                    __builtins__['print'] = old_print
+                else:
+                    __builtins__.print = old_print
+            html_out = buf.getvalue()
+            out_file = out_dir / (lp_file.stem + '.html')
+            out_file.write_text(html_out)
+            count += 1
+        print(f"lumpo build: {count} file(s) → {out_dir}/")
+    else:
+        # fallback: treat as file
+        if Path(cmd).exists() and cmd.endswith('.lp'):
+            run_file(cmd)
+        else:
+            print(f"unknown command: {cmd}")
+            sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
