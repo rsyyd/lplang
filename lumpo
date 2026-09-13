@@ -21,7 +21,7 @@ import sys, re
 from pathlib import Path
 from types import SimpleNamespace
 
-LUMPO_VERSION = "0.6.1"
+LUMPO_VERSION = "0.6.2"
 
 # ── stdlib loader ──
 _stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
@@ -378,6 +378,22 @@ class ContinueSignal(Exception):
     """skip to next loop iteration"""
     pass
 
+
+class LumpoError(RuntimeError):
+    """runtime error with optional source line; avoids string-mangling line
+    numbers into the user-visible message."""
+
+    def __init__(self, message, line=None):
+        self.line = line
+        super().__init__(message)
+
+
+def _line_of(node):
+    """best-effort source line for a node or exception."""
+    if isinstance(node, Exception):
+        return getattr(node, 'line', None)
+    return getattr(node, '_line', None)
+
 class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
@@ -408,9 +424,28 @@ class Parser:
             start_line = self.peek().line
             stmt = self.parse_stmt()
             stmt._line = start_line
+            self._attach_lines(stmt, start_line)
             stmts.append(stmt)
             self.skip_newlines()
         return Program(stmts)
+
+    def _attach_lines(self, node, line):
+        """recursively stamp every child node with _line so exec/eval can report the
+        exact expression line, not just the statement start line."""
+        stack = [node]
+        seen = set()
+        while stack:
+            n = stack.pop()
+            if id(n) in seen:
+                continue
+            seen.add(id(n))
+            if not hasattr(n, '_line'):
+                n._line = line
+            for attr in vars(n).values():
+                if isinstance(attr, list):
+                    stack.extend(a for a in attr if hasattr(a, '__dict__') and hasattr(a, '_line'))
+                elif hasattr(attr, '__dict__') and hasattr(attr, '_line'):
+                    stack.append(attr)
 
     def parse_stmt(self):
         self.skip_newlines()
@@ -1300,10 +1335,13 @@ def exec_block(stmts, env):
                 result = exec_stmt(s, env)
             except ReturnSignal:
                 raise
-            except (RuntimeError, AssertionError) as e:
-                line = getattr(s, '_line', None)
-                if line and '(line ' not in str(e) and 'assertion failed' not in str(e):
-                    raise RuntimeError(f"{e} (line {line})") from e
+            except (LumpoError, RuntimeError, AssertionError, IndexError, KeyError, ZeroDivisionError, TypeError, ValueError) as e:
+                # attach line only if not already set and node knows its line
+                if isinstance(e, LumpoError) and e.line is not None:
+                    raise
+                line = _line_of(s)
+                if line is not None and not isinstance(e, AssertionError):
+                    raise LumpoError(str(e), line=line) from e
                 raise
         return result
     finally:
@@ -1879,19 +1917,14 @@ def run_file(path):
     env = make_global_env()
     try:
         exec_block(ast.stmts, env)
-    except AssertionError as e:
-        line_no = '?'
-        m = re.search(r'line (\d+)', str(e))
-        if m:
-            line_no = int(m.group(1))
-        print(_format_error_frame(path, line_no, f"AssertionError: {e}"), file=sys.stderr)
-        sys.exit(1)
-    except RuntimeError as e:
-        line_no = '?'
-        m = re.search(r'\(line (\d+)\)', str(e))
-        if m:
-            line_no = int(m.group(1))
-        print(_format_error_frame(path, line_no, str(e)), file=sys.stderr)
+    except (AssertionError, RuntimeError) as e:
+        # LumpoError carries .line; others fall back to '?'
+        line_no = getattr(e, 'line', None)
+        if line_no is None:
+            m = re.search(r'line (\d+)', str(e))
+            line_no = int(m.group(1)) if m else '?'
+        label = f"AssertionError: {e}" if isinstance(e, AssertionError) else str(e)
+        print(_format_error_frame(path, line_no, label), file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(_format_error_frame(path, '?', str(e)), file=sys.stderr)

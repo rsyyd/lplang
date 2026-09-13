@@ -1,4 +1,4 @@
-# LPLang (Lumpo) v0.6.1
+# LPLang (Lumpo) v0.6.2
 
 **Bahasa pemrograman ringan, stabil, dan mudah dipahami.**
 
@@ -14,6 +14,7 @@ LPLang masih dalam tahap pengembangan awal (pre-1.0). Versi mengikuti semantic v
 | `0.5.0` | Ergonomi & keamanan resource: `defer`, pipe `|>`, arrow function `=>`, optional chaining `?.`, array/map destructuring |
 | `0.6.0` | Struct, method, pattern matching, list/map comprehension, validasi argumen fungsi, dan kompatibilitas modul stdlib |
 | `0.6.1` | CLI `--version`, konstanta versi tunggal, perbaikan banner REPL (sebelumnya salah tulis v1.1) |
+| `0.6.2` | Error reporting: line number untuk IndexError/KeyError, ekspresi error menunjuk baris yang tepat, message catch bersih dari `(line N)` |
 
 ## Fitur Bahasa
 - `let` / `const` — variabel mutable & read-only
@@ -102,15 +103,19 @@ try {
 
 ## Testing
 ```bash
-python3 tests/test_lplang.py       # core (6 test)
-python3 tests/test_lumpo_v2.py     # v2 (4 test)
-python3 tests/test_v0_5_0.py       # v0.2 (6 test)
-python3 tests/test_v1_1_0.py       # v0.3 (6 test)
-python3 tests/test_v1_3_0.py       # v0.4 (12 test)
-python3 tests/test_v1_3_1.py       # v0.4.1 (2 test)
+python3 tests/test_lplang.py         # core (8 test)
+python3 tests/test_lumpo_v2.py       # v2 (4 test)
+python3 tests/test_v0_5_0.py         # v0.5 (5 test)
+python3 tests/test_v1_1_0.py         # v0.3 (6 test)
+python3 tests/test_v1_2_0.py         # v0.3 (12 test)
+python3 tests/test_v1_3_0.py         # v0.4 (12 test)
+python3 tests/test_v1_3_1.py         # v0.4.1 (2 test)
+python3 tests/test_v0_6_0.py         # v0.6 (12 test)
+python3 tests/test_cli_version.py    # CLI --version (2 test)
+python3 tests/test_error_reporting.py # error reporting (5 test)
 ```
 
-Total: **63 test**, semua lulus.
+Total: **68 test**, semua lulus.
 
 ## Roadmap
 | Versi | Target |
