@@ -329,9 +329,10 @@ class ThrowStmt(ASTNode):
         self.expr = expr
 
 class CallExpr(ASTNode):
-    def __init__(self, callee, args):
+    def __init__(self, callee, args, kwargs=None):
         self.callee = callee
         self.args = args
+        self.kwargs = kwargs or {}
 
 class DotExpr(ASTNode):
     def __init__(self, obj, attr):
@@ -953,8 +954,8 @@ class Parser:
                 attr = self.expect('IDENT').value
                 node = OptDotExpr(node, attr)
             elif self.peek().kind == 'LPAREN':
-                args = self.parse_args()
-                node = CallExpr(node, args)
+                args, kwargs = self.parse_args()
+                node = CallExpr(node, args, kwargs)
             elif self.peek().kind == 'LBRACK':
                 self.advance()
                 index = self.parse_expr()
@@ -967,12 +968,33 @@ class Parser:
     def parse_args(self):
         self.expect('LPAREN')
         args = []
-        while self.peek().kind != 'RPAREN':
-            args.append(self.parse_expr())
+        kwargs = {}
+        if self.peek().kind == 'RPAREN':
+            self.expect('RPAREN')
+            return args, kwargs
+        while True:
+            # named argument: IDENT '=' expression  (only if followed by '=')
+            if self.peek().kind == 'IDENT' and self._peek_is_assign():
+                name = self.advance().value
+                self.expect('ASSIGN')
+                if name in kwargs:
+                    raise SyntaxError(f"duplicate named argument '{name}'")
+                kwargs[name] = self.parse_expr()
+            else:
+                args.append(self.parse_expr())
             if self.peek().kind == 'COMMA':
                 self.advance()
+                continue
+            break
         self.expect('RPAREN')
-        return args
+        return args, kwargs
+
+    def _peek_is_assign(self):
+        # look ahead: after current IDENT, next token is 'ASSIGN'
+        i = self.pos + 1
+        while i < len(self.tokens) and self.tokens[i].kind in ('NEWLINE', 'SKIP'):
+            i += 1
+        return i < len(self.tokens) and self.tokens[i].kind == 'ASSIGN'
 
     def _is_arrow_func(self):
         pos = self.pos + 1
