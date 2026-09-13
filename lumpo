@@ -21,7 +21,7 @@ import sys, re
 from pathlib import Path
 from types import SimpleNamespace
 
-LUMPO_VERSION = "0.7.0"
+LUMPO_VERSION = "0.7.1"
 
 # ── stdlib loader ──
 _stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
@@ -1245,6 +1245,26 @@ class Env:
         self.vars[name] = val
 
 
+def _bind_call_args(params, args, kwargs):
+    if not kwargs and len(args) != len(params):
+        raise RuntimeError(f"expected {len(params)} arguments, got {len(args)}")
+    if len(args) > len(params):
+        raise RuntimeError(f"expected {len(params)} arguments, got {len(args)}")
+
+    bound = dict(zip(params, args))
+    for name, val in kwargs.items():
+        if name not in params:
+            raise RuntimeError(f"unknown argument '{name}'")
+        if name in bound:
+            raise RuntimeError(f"multiple values for argument '{name}'")
+        bound[name] = val
+
+    missing = [name for name in params if name not in bound]
+    if missing:
+        raise RuntimeError(f"missing argument '{missing[0]}'")
+    return bound
+
+
 class LumpoFunction:
     def __init__(self, params, body, closure):
         self.params = params
@@ -1257,20 +1277,18 @@ class LumpoFunction:
         fn._bound = recv
         return fn
 
-    def __call__(self, *args):
+    def __call__(self, *args, **kwargs):
         params = self.params
-        call_args = args
         if self._bound is not None:
             if not params:
                 raise RuntimeError("method receiver is missing")
             params = params[1:]
-        if len(call_args) != len(params):
-            raise RuntimeError(f"expected {len(params)} arguments, got {len(call_args)}")
+        bound = _bind_call_args(params, args, kwargs)
         env = Env(self.closure)
         if self._bound is not None:
             env.set(self.params[0], self._bound)
-        for p, a in zip(params, call_args):
-            env.set(p, a)
+        for name in params:
+            env.set(name, bound[name])
         try:
             return exec_block(self.body, env)
         except ReturnSignal as r:
@@ -1661,9 +1679,10 @@ def eval_expr(node, env):
     elif isinstance(node, CallExpr):
         callee = eval_expr(node.callee, env)
         args = [eval_expr(a, env) for a in node.args]
+        kwargs = {name: eval_expr(arg, env) for name, arg in node.kwargs.items()}
         if callee is None:
             raise RuntimeError("attempted to call None")
-        return callee(*args)
+        return callee(*args, **kwargs)
     elif isinstance(node, DotExpr):
         obj = eval_expr(node.obj, env)
         # Check SimpleNamespace first (imported modules)

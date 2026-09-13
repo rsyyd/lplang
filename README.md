@@ -1,4 +1,4 @@
-# LPLang (Lumpo) v0.7.0
+# LPLang (Lumpo) v0.7.1
 
 **Bahasa pemrograman ringan, stabil, dan mudah dipahami.**
 
@@ -15,7 +15,8 @@ LPLang masih dalam tahap pengembangan awal (pre-1.0). Versi mengikuti semantic v
 | `0.6.0` | Struct, method, pattern matching, list/map comprehension, validasi argumen fungsi, dan kompatibilitas modul stdlib |
 | `0.6.1` | CLI `--version`, konstanta versi tunggal, perbaikan banner REPL (sebelumnya salah tulis v1.1) |
 | `0.6.2` | Error reporting: line number untuk IndexError/KeyError, ekspresi error menunjuk baris yang tepat, message catch bersih dari `(line N)` |
-| `0.7.0` | Module resolution diperluas: import tanpa ekstensi (`import "./lib/util"`), import relatif cwd (`import "lib/util.lp"`), resolver konsisten untuk proyek multi-file |
+|| `0.7.1` | **Patch**: keyword/named arguments sekarang benar-benar berfungsi (bug fix), mixed positional + named, validasi duplikasi & argument tidak dikenal |
+|| `0.7.0` | Module resolution diperluas: import tanpa ekstensi (`import "./lib/util"`), import relatif cwd (`import "lib/util.lp"`), resolver konsisten untuk proyek multi-file |
 
 ## Fitur Bahasa
 - `let` / `const` — variabel mutable & read-only
@@ -128,7 +129,7 @@ Total: **73 test**, semua lulus.
 | ✅ 0.4.0 | Bahasa lengkap (switch, ternary, ??, break/continue) |
 | ✅ 0.5.0 | Destructuring, spread operator, arrow fn, enum |
 | ✅ 0.6.0 | Struct, method, pattern matching, comprehension |
-| ⏩ 0.7.0 | Iterators, enhanced pattern matching, operator overloading |
+|| ⏩ 0.8.0 | Iterators, enhanced pattern matching, operator overloading |
 | ⏩ 0.8.0 | Async/await, event loop |
 | ⏩ 1.0.0 | Gradual typing, LSP, production-ready |
 

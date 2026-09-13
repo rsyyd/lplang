@@ -36,6 +36,26 @@ class TestLPLangCore(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout.strip(), "7")
 
+    def test_function_accepts_named_arguments(self):
+        res = run_src('fn greet(name, title) { return "${title} ${name}" }\nprint greet(title="Dr.", name="Lumpo")\n')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "Dr. Lumpo")
+
+    def test_function_accepts_mixed_positional_and_named_arguments(self):
+        res = run_src('fn greet(name, title) { return "${title} ${name}" }\nprint greet("Lumpo", title="Dr.")\n')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "Dr. Lumpo")
+
+    def test_function_rejects_unknown_named_argument(self):
+        res = run_src('fn greet(name) { return name }\nprint greet(who="Lumpo")\n')
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("unknown argument 'who'", res.stderr)
+
+    def test_function_rejects_duplicate_argument_value(self):
+        res = run_src('fn greet(name) { return name }\nprint greet("Lumpo", name="LPLang")\n')
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("multiple values for argument 'name'", res.stderr)
+
     def test_function_rejects_wrong_argument_count(self):
         too_few = run_src('fn add(a, b) { return a + b }\nprint add(3)\n')
         self.assertNotEqual(too_few.returncode, 0)
