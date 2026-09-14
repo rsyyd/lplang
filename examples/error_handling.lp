@@ -1,41 +1,41 @@
-# examples/error_handling.lp — demo try/catch/throw di LPLang 1.2
+# examples/error_handling.lp — demo try/catch/throw in LPLang 1.2
 
-# ── throw & catch manual ──
-fn bagi(a, b) {
+# ── manual throw & catch ──
+fn divide(a, b) {
     if b == 0 {
-        throw "tidak bisa bagi dengan nol"
+        throw "cannot divide by zero"
     }
     return a / b
 }
 
-print bagi(10, 2)          # 5
+print divide(10, 2)          # 5
 
 try {
-    print bagi(10, 0)      # throw "tidak bisa bagi dengan nol"
+    print divide(10, 0)      # throws "cannot divide by zero"
 } catch e {
-    print "error tertangkap: ${e}"
+    print "error caught: ${e}"
 }
 
-# ── catch error runtime otomatis ──
+# ── catch automatic runtime errors ──
 try {
-    let x = variabel_tidak_ada + 1
+    let x = undefined_variable + 1
 } catch e {
-    print "runtime error tertangkap: ${e}"
+    print "runtime error caught: ${e}"
 }
-print "program tetap lanjut"
+print "program continues"
 
-# ── try tanpa error: blok catch di-skip ──
+# ── try without error: catch block skipped ──
 try {
-    print "blok try jalan normal"
+    print "try block runs normally"
 } catch e {
-    print "tidak akan pernah tampil"
+    print "will never display"
 }
 
-# ── import file lokal .lp ──
+# ── import local .lp file ──
 import "./lib_math.lp"
 print "double(21) = ${double(21)}"
 
-# ── math & time module ──
+# ── math & time modules ──
 import "math"
 import "time"
 
@@ -43,10 +43,10 @@ print "sqrt(144) = ${math.sqrt(144)}"
 print "pow(2, 8) = ${math.pow(2, 8)}"
 print "floor(3.9) = ${math.floor(3.9)}  ceil(3.1) = ${math.ceil(3.1)}  round(3.5) = ${math.round(3.5)}"
 
-let mulai = time.now()
+let start = time.now()
 time.sleep(0.1)
-let selesai = time.now()
-print "sleep 0.1s terukur: ${math.round((selesai - mulai) * 1000)}ms"
-print "waktu ISO: ${time.iso()}"
+let end = time.now()
+print "sleep 0.1s measured: ${math.round((end - start) * 1000)}ms"
+print "ISO time: ${time.iso()}"
 
-print "demo error + modul selesai!"
+print "demo error + modules complete!"

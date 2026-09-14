@@ -6,13 +6,13 @@ import "crypto"
 import "env"
 import "log"
 
-# in-memory DB untuk demo
+# in-memory DB for demo
 let db = db.open(":memory:")
 db.execute("CREATE TABLE IF NOT EXISTS todos(id INTEGER PRIMARY KEY, title TEXT, done INTEGER)")
 
 fn seed_data() {
-    db.execute("INSERT INTO todos (title, done) VALUES (?, ?)", ["beli kopi", 1])
-    db.execute("INSERT INTO todos (title, done) VALUES (?, ?)", ["ngoding", 0])
+    db.execute("INSERT INTO todos (title, done) VALUES (?, ?)", ["buy coffee", 1])
+    db.execute("INSERT INTO todos (title, done) VALUES (?, ?)", ["coding", 0])
     log.info("seeded 2 todos")
 }
 
@@ -24,7 +24,7 @@ fn home_page(req) {
     let total = int(rows[0]["c"])
     let body = """
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>Lumpo App</title>
@@ -32,11 +32,11 @@ fn home_page(req) {
 </head>
 <body>
 <div class="header">
-<h1>Selamat datang, ${name}!</h1>
-<p>ini aplikasi lumpo yang berjalan di server ini.</p>
-<p>total todo: ${total}</p>
+<h1>Welcome, ${name}!</h1>
+<p>this is a lumpo application running on this server.</p>
+<p>total todos: ${total}</p>
 </div>
-<a href="/api/todos">lihat API data</a>
+<a href="/api/todos">view API data</a>
 </body>
 </html>
 """
