@@ -117,18 +117,17 @@ python3 -m unittest discover tests -v    # run all tests
 ```
 
 Test files:
-- `test_lplang.py` — core language (8 tests)
+- `test_lplang.py` — core language (12 tests)
 - `test_lumpo_v2.py` — v2 features (4 tests)
+- `test_v0_2_0.py` — v0.2 (assert, http, middleware, fmt, test command, errors; 6 tests)
+- `test_v0_3_0.py` — v0.3 (try/catch/throw, local imports, math, time, functional builtins; 12 tests)
+- `test_v0_4_0.py` — v0.4 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 12 tests)
+- `test_v0_4_1.py` — v0.4.1 (os, struct modules; 2 tests)
 - `test_v0_5_0.py` — v0.5 (defer, pipe, arrow, optional chaining, destructuring; 5 tests)
-- `test_v1_1_0.py` — v1.1 (assert, http, middleware, fmt, test command, errors; 6 tests)
-- `test_v1_2_0.py` — v1.2 (try/catch/throw, local imports, math, time, functional builtins; 12 tests)
-- `test_v1_3_0.py` — v1.3 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 12 tests)
-- `test_v1_3_1.py` — v1.3.1 (2 tests)
 - `test_v0_6_0.py` — v0.6 (structs, methods, match, comprehensions; 12 tests)
 - `test_cli_version.py` — CLI --version (2 tests)
 - `test_error_reporting.py` — error reporting (5 tests)
 - `test_module_resolution.py` — module resolution (5 tests)
-- `test_documentation.py` — documentation consistency (documentation, 4 tests)
 
 All tests pass on v0.7.1.
 

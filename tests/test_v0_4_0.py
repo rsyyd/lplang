@@ -1,4 +1,4 @@
-"""v1.3.0 language-completeness tests: switch, compound assign, break/continue,
+"""v0.4.0 language-completeness tests: switch, compound assign, break/continue,
 block comments, null-coalescing, ternary, new string methods, range step.
 Written BEFORE implementation (TDD)."""
 import unittest
@@ -26,20 +26,20 @@ class TestSwitch(unittest.TestCase):
         res = run_lp('''
 let x = 2
 switch x {
-    case 1 { print "satu" }
-    case 2 { print "dua" }
-    case 3 { print "tiga" }
-    default { print "lain" }
+    case 1 { print "one" }
+    case 2 { print "two" }
+    case 3 { print "three" }
+    default { print "other" }
 }
 ''')
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("dua", res.stdout)
-        self.assertNotIn("satu", res.stdout)
+        self.assertIn("two", res.stdout)
+        self.assertNotIn("one", res.stdout)
 
     def test_switch_default(self):
         res = run_lp('''
 switch 99 {
-    case 1 { print "satu" }
+    case 1 { print "one" }
     default { print "fallback" }
 }
 ''')
@@ -105,8 +105,8 @@ print total
 class TestBlockComments(unittest.TestCase):
     def test_block_comment(self):
         res = run_lp('''
-/* komentar
-   multi baris */
+/* comment
+   multi line */
 let x = 42
 print x
 ''')
@@ -124,23 +124,23 @@ class TestNullCoalescing(unittest.TestCase):
         res = run_lp('''
 let a = null
 print a ?? "default"
-let b = "isi"
+let b = "value"
 print b ?? "default"
 ''')
         self.assertEqual(res.returncode, 0, res.stderr)
         lines = [l.strip() for l in res.stdout.strip().split("\n")]
-        self.assertEqual(lines, ["default", "isi"])
+        self.assertEqual(lines, ["default", "value"])
 
 
 class TestTernary(unittest.TestCase):
     def test_ternary(self):
         res = run_lp('''
-let umur = 17
-let status = umur >= 18 ? "dewasa" : "bocil"
+let age = 17
+let status = age >= 18 ? "adult" : "minor"
 print status
 ''')
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("bocil", res.stdout)
+        self.assertIn("minor", res.stdout)
 
 
 class TestStringMethods(unittest.TestCase):

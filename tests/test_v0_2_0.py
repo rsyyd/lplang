@@ -22,7 +22,7 @@ def run_lp(src, timeout=10):
         os.unlink(path)
 
 
-class TestV110Features(unittest.TestCase):
+class TestV020Features(unittest.TestCase):
     def test_assert_builtin_success_and_failure(self):
             # assert(true) should pass
             res_ok = run_lp('assert(1 + 1 == 2, "math works")\nprint "ok"\n')

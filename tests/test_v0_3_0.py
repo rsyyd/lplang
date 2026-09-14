@@ -1,4 +1,4 @@
-"""v1.2.0 language-core tests: try/catch/throw, local imports, math/time modules,
+"""v0.3.0 language-core tests: try/catch/throw, local imports, math/time modules,
 functional builtins. Written BEFORE implementation (TDD)."""
 import unittest
 import subprocess
