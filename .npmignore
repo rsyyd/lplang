@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+tests/
+examples/
+tests/__pycache__/
+.gitignore
+*.swp
+*.swo
+*~
+.DS_Store
+node_modules/
+temp_versions/
+lumpo_github_repo/

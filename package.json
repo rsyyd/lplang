@@ -1,0 +1,25 @@
+{
+  "name": "@rsyyd/lplang",
+  "version": "0.8.0",
+  "description": "A general-purpose programming language",
+  "bin": {
+    "lumpo": "./lumpo"
+  },
+  "files": [
+    "lumpo",
+    "lumpo_stdlib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rsyyd/lplang.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "programming-language",
+    "interpreter",
+    "lplang",
+    "lumpo"
+  ]
+}
