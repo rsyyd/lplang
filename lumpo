@@ -23,7 +23,7 @@ from types import SimpleNamespace
 LUMPO_VERSION = "0.8.0"
 
 # ── stdlib loader ──
-_stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
+_stdlib_dir = Path(__file__).resolve().parent / 'lumpo_stdlib'
 _stdlib_cache = {}
 _current_file = None
 

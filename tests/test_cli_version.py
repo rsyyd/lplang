@@ -23,5 +23,19 @@ class TestCliVersion(unittest.TestCase):
         self.assertIn("REPL", res.stdout)
         self.assertRegex(res.stdout, r"lumpo v\d+\.\d+\.\d+ REPL")
 
+    def test_symlinked_cli_finds_standard_library(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cli = Path(temp_dir) / "lumpo"
+            cli.symlink_to(LUMPO)
+            source = Path(temp_dir) / "program.lp"
+            source.write_text('import "math"\nprint math.sqrt(16)\n')
+            res = subprocess.run([cli, "run", source], capture_output=True, text=True)
+
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "4.0")
+
 if __name__ == '__main__':
     unittest.main()
