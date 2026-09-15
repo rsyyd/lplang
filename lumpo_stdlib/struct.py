@@ -1,4 +1,4 @@
-# lumpo_stdlib/struct.py — basic binary packing/unpacking for lumpo
+# lumpo_stdlib/struct.py - basic binary packing/unpacking for lumpo
 import struct as _struct
 
 

@@ -19,7 +19,7 @@ class REPL:
             print(f"error (line {self.line_no}): {e}")
 
     def banner(self):
-        print("lumpo REPL — type `exit` or Ctrl+D to quit")
+        print("lumpo REPL - type `exit` or Ctrl+D to quit")
         print("type a statement, multi-line blocks end with `}` on its own line")
 
     def run(self):

@@ -1,4 +1,4 @@
-# lumpo_stdlib/math.py — math module for lumpo
+# lumpo_stdlib/math.py - math module for lumpo
 import math as _math
 
 

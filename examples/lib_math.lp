@@ -1,4 +1,4 @@
-# lib_math.lp — local library imported by other examples (.lp)
+# lib_math.lp - local library imported by other examples (.lp)
 # called via: import "./lib_math.lp"
 
 fn double(n) {

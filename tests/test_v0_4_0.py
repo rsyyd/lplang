@@ -75,6 +75,29 @@ print x
         lines = [l.strip() for l in res.stdout.strip().split("\n")]
         self.assertEqual(lines, ["15", "12", "48", "24"])
 
+    def test_floor_division(self):
+        res = run_lp('print 10 // 3\n')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "3")
+
+    def test_floor_division_assignment(self):
+        res = run_lp('''
+let x = 10
+x //= 3
+print x
+''')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "3")
+
+    def test_floor_division_field_assignment(self):
+        res = run_lp('''
+let value = { count: 10 }
+value.count //= 3
+print value.count
+''')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "3")
+
 
 class TestBreakContinue(unittest.TestCase):
     def test_break(self):

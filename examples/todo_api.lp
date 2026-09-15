@@ -1,4 +1,4 @@
-# full-stack todo API — demo of all lumpo features together
+# full-stack todo API - demo of all lumpo features together
 import "http"
 import "db"
 import "json"
@@ -24,7 +24,7 @@ fn get_todo(req) {
 }
 
 fn create_todo(req) {
-    # simplified body parsing — just hardcode demo
+    # simplified body parsing - just hardcode demo
     let title = req.query.get("title", ["untitled"])[0]
     db.execute("INSERT INTO todos (title, done) VALUES (?, 0)", [title])
     return [201, "application/json", json.stringify({"status": "created", "title": title})]

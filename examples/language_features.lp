@@ -1,4 +1,4 @@
-# examples/language_features.lp — demo core LPLang 1.2 features
+# examples/language_features.lp - demo core LPLang 1.2 features
 # (variables, functions, string interpolation, collections, functional builtins)
 
 # ── variables & basic types ──

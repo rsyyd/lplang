@@ -1,4 +1,4 @@
-# examples/error_handling.lp — demo try/catch/throw in LPLang 1.2
+# examples/error_handling.lp - demo try/catch/throw in LPLang 1.2
 
 # ── manual throw & catch ──
 fn divide(a, b) {

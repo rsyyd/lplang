@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""lumpo v0.7.1 — LPLang interpreter with native syntax
+"""lumpo v0.8.0 - LPLang interpreter with native syntax
 supports:
   - let x = expr
   - print expr
@@ -20,7 +20,7 @@ import sys, re
 from pathlib import Path
 from types import SimpleNamespace
 
-LUMPO_VERSION = "0.7.1"
+LUMPO_VERSION = "0.8.0"
 
 # ── stdlib loader ──
 _stdlib_dir = Path(__file__).parent / 'lumpo_stdlib'
@@ -99,7 +99,7 @@ TOKEN_SPEC = [
     ('ARROW',     r'->'),
     ('FATARROW',  r'=>'),
     ('OPTDOT',    r'\?\.'),
-    ('OP',        r'\?\?|\?:|<=|>=|!=|==|\+=|-=|\*=|/=|%=|&&|\|\||//|\?|[+\-*/%]|[<>]'),
+    ('OP',        r'\?\?|\?:|<=|>=|!=|==|\+=|-=|\*=|/=|%=|//=|&&|\|\||//|\?|[+\-*/%]|[<>]'),
     ('LBRACE',    r'\{'),
     ('RBRACE',    r'\}'),
     ('LPAREN',    r'\('),
@@ -846,7 +846,7 @@ class Parser:
             self.advance()
             val = self.parse_expr()
             return AssignStmt(expr.name, val)
-        if self.peek().kind == 'OP' and self.peek().value in ('+=', '-=', '*=', '/=', '%=') and isinstance(expr, Ident):
+        if self.peek().kind == 'OP' and self.peek().value in ('+=', '-=', '*=', '/=', '%=', '//=') and isinstance(expr, Ident):
             op = self.advance().value
             val = self.parse_expr()
             return AssignStmt(expr.name, val, op=op)
@@ -855,7 +855,7 @@ class Parser:
             if op.kind == 'ASSIGN':
                 val = self.parse_expr()
                 return DotAssignStmt(expr.obj, expr.attr, val)
-            if op.value in ('+=', '-=', '*=', '/=', '%='):
+            if op.value in ('+=', '-=', '*=', '/=', '%=', '//='):
                 val = self.parse_expr()
                 return DotAssignStmt(expr.obj, expr.attr, val, op=op.value)
         return ExprStmt(expr)
@@ -924,7 +924,7 @@ class Parser:
 
     def parse_mul(self):
         left = self.parse_unary()
-        while self.peek().kind == 'OP' and self.peek().value in ('*', '/', '%'):
+        while self.peek().kind == 'OP' and self.peek().value in ('*', '/', '//', '%'):
             op = self.advance().value
             right = self.parse_unary()
             left = BinOp(op, left, right)
@@ -1637,6 +1637,13 @@ def eval_expr(node, env):
             func = eval_expr(node.right, env)
             return func(left_val)
     elif isinstance(node, BinOp):
+        if node.op in ('&&', 'and'):
+            left = eval_expr(node.left, env)
+            return left if not left else eval_expr(node.right, env)
+        if node.op in ('||', 'or'):
+            left = eval_expr(node.left, env)
+            return left if left else eval_expr(node.right, env)
+
         left = eval_expr(node.left, env)
         right = eval_expr(node.right, env)
         ops = {
@@ -1995,7 +2002,7 @@ def run_file(path):
 
 
 def repl():
-    print(f"lumpo v{LUMPO_VERSION} REPL — type 'exit' to quit")
+    print(f"lumpo v{LUMPO_VERSION} REPL - type 'exit' to quit")
     env = make_global_env()
     while True:
         try:
@@ -2145,8 +2152,19 @@ def main():
 
     cmd = sys.argv[1]
 
-    if cmd == '--version':
+    if cmd in ('--version', '--help'):
         print(f"lumpo v{LUMPO_VERSION}")
+        if cmd == '--help':
+            print("usage: lumpo <command> [args]")
+            print("commands:")
+            print("  run <file.lp>    run a lumpo program")
+            print("  repl             interactive REPL")
+            print("  build <src> <out> build static site")
+            print("  fmt <file.lp>    format source file in place")
+            print("  test [path]      run *_test.lp / test_*.lp files")
+            print("  dev <file.lp>    run + auto-restart on .lp changes")
+            print("  --version        show version")
+            print("  --help           show this help")
         sys.exit(0)
 
     if cmd == 'run':

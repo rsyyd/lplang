@@ -1,4 +1,4 @@
-# lumpo_stdlib/time.py — time module for lumpo
+# lumpo_stdlib/time.py - time module for lumpo
 import time as _time
 from datetime import datetime as _dt
 

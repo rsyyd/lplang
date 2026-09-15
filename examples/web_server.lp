@@ -1,4 +1,4 @@
-# web server example — lumpo (full featured)
+# web server example - lumpo (full featured)
 import "http"
 import "db"
 import "json"

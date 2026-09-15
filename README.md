@@ -2,7 +2,7 @@
 
 A lightweight, stable, and expressive general-purpose programming language.
 
-LPLang is in active development (pre-1.0). Versions follow honest semantic versioning — `0.x.y` means not yet production-ready.
+LPLang is in active development (pre-1.0). Versions follow honest semantic versioning - `0.x.y` means not yet production-ready.
 
 ## Changelog
 
@@ -18,17 +18,18 @@ LPLang is in active development (pre-1.0). Versions follow honest semantic versi
 | `0.6.2` | Better error reporting: line numbers for IndexError/KeyError, precise error location |
 | `0.7.0` | Module resolution: import without extension (`import "./lib/util"`), relative imports from cwd, consistent resolver |
 | `0.7.1` | **Patch**: keyword/named arguments now work correctly (runtime binding bug fix); validates mixed positional+named, detects duplicates and unknown args |
+| `0.8.0` | **Minor**: `--help` flag added; shows usage and available commands |
 
 ## Language Features
 
-- `let` / `const` — mutable and read-only variables
+- `let` / `const` - mutable and read-only variables
 - Destructuring: `let [a, b] = list`, `let {name, age} = user`
 - Types: number, string, boolean, list, map, null
 - String interpolation: `"hello ${name}"`, triple-quote, single-quote strings
 - Arrow functions: `x => x * 2` or `(a, b) => a + b`
 - Pipe operator: `data |> map(fn) |> filter(fn)` (result becomes first arg)
 - Optional chaining: `user?.profile?.name` (always safe for null)
-- `defer` — cleanup in LIFO order on function/block exit, even on return/error
+- `defer` - cleanup in LIFO order on function/block exit, even on return/error
 - First-class functions, recursion, closures, named/keyword arguments
 - Control flow: if/else, while, for..in, break, continue
 - `match` with literal patterns, variable binding, struct patterns, multi-statement cases, default
@@ -62,11 +63,12 @@ LPLang is in active development (pre-1.0). Versions follow honest semantic versi
 
 ## Tooling
 
-- `lumpo run file.lp` — execute program
-- `lumpo fmt file.lp` — auto-format source
-- `lumpo test [path]` — run tests
-- `lumpo dev file.lp` — watch file and auto-restart
-- `lumpo repl` — interactive shell (tab-completion)
+- `lumpo run file.lp` - execute program
+- `lumpo --help` - show available commands
+- `lumpo fmt file.lp` - auto-format source
+- `lumpo test [path]` - run tests
+- `lumpo dev file.lp` - watch file and auto-restart
+- `lumpo repl` - interactive shell (tab-completion)
 - Humanized error reporter (snippet + line number)
 
 ## Quick Start
@@ -117,17 +119,17 @@ python3 -m unittest discover tests -v    # run all tests
 ```
 
 Test files:
-- `test_lplang.py` — core language (12 tests)
-- `test_lumpo_v2.py` — v2 features (4 tests)
-- `test_v0_2_0.py` — v0.2 (assert, http, middleware, fmt, test command, errors; 6 tests)
-- `test_v0_3_0.py` — v0.3 (try/catch/throw, local imports, math, time, functional builtins; 12 tests)
-- `test_v0_4_0.py` — v0.4 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 12 tests)
-- `test_v0_4_1.py` — v0.4.1 (os, struct modules; 2 tests)
-- `test_v0_5_0.py` — v0.5 (defer, pipe, arrow, optional chaining, destructuring; 5 tests)
-- `test_v0_6_0.py` — v0.6 (structs, methods, match, comprehensions; 12 tests)
-- `test_cli_version.py` — CLI --version (2 tests)
-- `test_error_reporting.py` — error reporting (5 tests)
-- `test_module_resolution.py` — module resolution (5 tests)
+- `test_lplang.py` - core language (12 tests)
+- `test_lumpo_v2.py` - v2 features (4 tests)
+- `test_v0_2_0.py` - v0.2 (assert, http, middleware, fmt, test command, errors; 6 tests)
+- `test_v0_3_0.py` - v0.3 (try/catch/throw, local imports, math, time, functional builtins; 12 tests)
+- `test_v0_4_0.py` - v0.4 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 12 tests)
+- `test_v0_4_1.py` - v0.4.1 (os, struct modules; 2 tests)
+- `test_v0_5_0.py` - v0.5 (defer, pipe, arrow, optional chaining, destructuring; 5 tests)
+- `test_v0_6_0.py` - v0.6 (structs, methods, match, comprehensions; 12 tests)
+- `test_cli_version.py` - CLI --version and --help (3 tests)
+- `test_error_reporting.py` - error reporting (5 tests)
+- `test_module_resolution.py` - module resolution (5 tests)
 
 All tests pass on v0.7.1.
 
@@ -149,4 +151,4 @@ All tests pass on v0.7.1.
 
 ## License
 
-MIT — see LICENSE file.
+MIT - see LICENSE file.

@@ -49,7 +49,7 @@ class TestModuleResolution(unittest.TestCase):
     def test_stdio_import_uses_stdlib(self):
         res = run_in(self._tmp, 'import "math"\nprint sqrt(16)\n')
         self.assertEqual(res.returncode, 0, res.stderr)
-        # sqrt returns float (4.0) — accept either rendering of the value
+        # sqrt returns float (4.0) - accept either rendering of the value
         self.assertEqual(res.stdout.strip(), "4.0")
 
     def test_missing_module_errors(self):

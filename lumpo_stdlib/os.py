@@ -1,4 +1,4 @@
-# lumpo_stdlib/os.py — operating system interaction for lumpo
+# lumpo_stdlib/os.py - operating system interaction for lumpo
 import os as _os
 import sys as _sys
 

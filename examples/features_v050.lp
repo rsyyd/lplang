@@ -1,4 +1,4 @@
-# Lumpo v0.5.0 — ergonomics and resource safety
+# Lumpo v0.5.0 - ergonomics and resource safety
 
 fn add(a, b) { return a + b }
 let double = x => x * 2

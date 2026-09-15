@@ -1,4 +1,4 @@
-# static site page — will be compiled to HTML by `lumpo build`
+# static site page - will be compiled to HTML by `lumpo build`
 let title = "Beranda"
 let year = 2026
 

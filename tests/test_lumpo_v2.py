@@ -45,6 +45,36 @@ class TestLumpoV2(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("False", res.stdout)
 
+    def test_boolean_operator_and_short_circuits(self):
+        res = run_src('''
+let called = false
+fn boom() { called = true; return true }
+print false && boom()
+print called
+''')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "False\nFalse")
+
+    def test_boolean_operator_or_short_circuits(self):
+        res = run_src('''
+let called = false
+fn boom() { called = true; return false }
+print true || boom()
+print called
+''')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "True\nFalse")
+
+    def test_boolean_keyword_operators_short_circuit(self):
+        res = run_src('''
+let called = false
+fn boom() { called = true; return true }
+print false and boom()
+print true or boom()
+print called
+''')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "False\nTrue\nFalse")
 
 if __name__ == "__main__":
     unittest.main()

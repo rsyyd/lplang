@@ -1,4 +1,4 @@
-# examples/unit_test.lp — unit test example
+# examples/unit_test.lp - unit test example
 
 fn test_math() {
     assert(10 * 10 == 100, "multiplication 10x10")

@@ -1,4 +1,4 @@
-# examples/features_v130.lp — demo new LPLang 1.3.0 features
+# examples/features_v130.lp - demo new LPLang 1.3.0 features
 # (switch, break/continue, compound assign, block comment, null-coalescing, ternary)
 
 /* this is a block comment
