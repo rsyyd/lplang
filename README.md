@@ -1,4 +1,4 @@
-# LPLang (Lumpo) v0.7.1
+# LPLang (Lumpo) v0.8.0
 
 A lightweight, stable, and expressive general-purpose programming language.
 
@@ -17,8 +17,8 @@ LPLang is in active development (pre-1.0). Versions follow honest semantic versi
 | `0.6.1` | CLI --version, single version constant, fixed REPL banner |
 | `0.6.2` | Better error reporting: line numbers for IndexError/KeyError, precise error location |
 | `0.7.0` | Module resolution: import without extension (`import "./lib/util"`), relative imports from cwd, consistent resolver |
-| `0.7.1` | **Patch**: keyword/named arguments now work correctly (runtime binding bug fix); validates mixed positional+named, detects duplicates and unknown args |
-| `0.8.0` | **Minor**: `--help` flag added; shows usage and available commands |
+| `0.7.1` | Patch: keyword/named arguments now work correctly (runtime binding bug fix); validates mixed positional+named, detects duplicates and unknown args |
+| `0.8.0` | Minor: `--help` flag added; shows usage and available commands. Boolean operators `&&` and `||` now short-circuit. Floor division operator `//` and `//=` added. |
 
 ## Language Features
 
@@ -39,7 +39,7 @@ LPLang is in active development (pre-1.0). Versions follow honest semantic versi
 - try/catch/throw
 - Ternary: `cond ? a : b`
 - Null-coalescing: `a ?? "default"`
-- Compound assignment: `+= -= *= /= %=`
+- Compound assignment: `+= -= *= /= %= //=`
 - Block comments: `/* ... */`
 - Integer division: `//`
 - 35+ built-in functions
@@ -112,7 +112,7 @@ try {
 
 ## Testing
 
-The test suite has **77 tests** organized by language version/feature:
+The test suite has **84 tests** organized by language version/feature:
 
 ```bash
 python3 -m unittest discover tests -v    # run all tests
@@ -120,10 +120,10 @@ python3 -m unittest discover tests -v    # run all tests
 
 Test files:
 - `test_lplang.py` - core language (12 tests)
-- `test_lumpo_v2.py` - v2 features (4 tests)
+- `test_lumpo_v2.py` - v2 features (7 tests)
 - `test_v0_2_0.py` - v0.2 (assert, http, middleware, fmt, test command, errors; 6 tests)
 - `test_v0_3_0.py` - v0.3 (try/catch/throw, local imports, math, time, functional builtins; 12 tests)
-- `test_v0_4_0.py` - v0.4 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 12 tests)
+- `test_v0_4_0.py` - v0.4 (switch, compound assign, break/continue, null-coalescing, ternary, strings, range; 15 tests)
 - `test_v0_4_1.py` - v0.4.1 (os, struct modules; 2 tests)
 - `test_v0_5_0.py` - v0.5 (defer, pipe, arrow, optional chaining, destructuring; 5 tests)
 - `test_v0_6_0.py` - v0.6 (structs, methods, match, comprehensions; 12 tests)
@@ -131,7 +131,7 @@ Test files:
 - `test_error_reporting.py` - error reporting (5 tests)
 - `test_module_resolution.py` - module resolution (5 tests)
 
-All tests pass on v0.7.1.
+All tests pass on v0.8.0.
 
 ## Roadmap
 
@@ -145,7 +145,7 @@ All tests pass on v0.7.1.
 | ✅ 0.6.0 | Structs, methods, pattern matching, comprehensions |
 | ✅ 0.7.0 | Module resolution (extension-optional imports) |
 | ✅ 0.7.1 | Named/keyword arguments (bug fix) |
-| ⏳ 0.8.0 | Iterators, enhanced pattern matching, operator overloading |
+| ✅ 0.8.0 | Help flag, short-circuit booleans, floor division |
 | ⏳ 0.9.0 | Async/await, event loop |
 | ⏳ 1.0.0 | Gradual typing, LSP, production-ready |
 
